@@ -7,12 +7,16 @@
 //   downlinks unacked behind a long train, seconds the device sent as heard here,
 //   seconds of wake-up trains for the device as heard here.
 // "total" has the same counts since boot, with no airtime. "windows" says how many
-// seconds each window covers.
+// seconds each window covers. "baseline" of a device has the counts of its day window
+// when the node last left monitor mode, as in "day"; the top-level "baseline" says how
+// long that window was and how long ago. "advice" lists what the rules in advice.h
+// found, the most urgent first.
 #pragma once
 
 #include <cstddef>
 #include <cstdint>
 
+#include "advice.h"
 #include "link_monitor.h"
 #include "name_table.h"
 #include "pair_manager.h"
@@ -49,7 +53,7 @@ struct StatusInput {
 
 // The buffer the firmware gives writeStatusJson. A test fills every field to its widest
 // and checks that the JSON fits with room to spare.
-constexpr size_t kStatusJsonCapacity = 36000;
+constexpr size_t kStatusJsonCapacity = 44000;
 
 // Writes to `out`, always terminated. Returns false if `capacity` was too small.
 bool writeStatusJson(const StatusInput& input, char* out, size_t capacity);

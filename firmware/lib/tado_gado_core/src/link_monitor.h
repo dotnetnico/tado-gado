@@ -32,6 +32,8 @@ constexpr size_t kHeardAckCapacity = 32;
 // A wake-up train longer than this was aimed at a device whose sample time the sender
 // did not know. A train for a known sample takes about 80 ms.
 constexpr uint64_t kLongTrainUs = 200000;
+// A spell of monitor mode shorter than this does not replace the baseline of the last.
+constexpr uint64_t kMinBaselineUs = 900ULL * 1000000ULL;
 
 struct DeviceLink {
   bool used;
@@ -48,14 +50,21 @@ struct DeviceLink {
   uint32_t downlinksUnacked;
   uint64_t lastDownlinkUs;
   uint32_t retransmissions;
+  // Frames this node answered and took on. In a pair the other node delivers them.
   uint32_t proxiedUplinks;
   uint32_t proxiedDownlinks;
+  // Frames the other node of a pair took on and gave this node to deliver.
+  uint32_t handedUplinks;
+  uint32_t handedDownlinks;
   uint32_t deliveryFailures;
   uint32_t longTrainAcked;
   uint32_t longTrainUnacked;
   uint32_t ackedByPeer;        // Answers that only the other node of a pair heard.
   uint32_t alreadyAnswered;    // Frames the valve node got to deliver, which the device had already.
   HourlyAirtime<300> airtime;  // What this node spent on the device.
+  // The day window as it stood when the node last left monitor mode: how the device
+  // did without the proxy. Zero for a device first heard after that.
+  LinkTotals baseline;
   LinkBucket hour[kHourBuckets];
   LinkBucket day[kDayBuckets];
 };
@@ -104,9 +113,15 @@ class LinkMonitor {
   void tick(uint64_t nowUs);
 
   // The hour and day windows start empty again, from `nowUs`. The proxy does this when
-  // it starts or stops, so a window never mixes the two modes.
+  // it starts or stops, so a window never mixes the two modes. Leaving monitor mode, the
+  // day window of each device is kept first, as its baseline, if it covers at least
+  // kMinBaselineUs or there is none yet.
   void resetWindows(uint64_t nowUs);
   uint64_t windowsSinceUs() const { return windowsSinceUs_; }
+  uint64_t hourCoveredUs(uint64_t nowUs) const;
+  uint64_t dayCoveredUs(uint64_t nowUs) const;
+  // The time the baselines cover, and when they were taken. False before the first.
+  bool baseline(uint64_t& coveredUs, uint64_t& takenUs) const;
   LinkTotals hourTotals(const DeviceLink& device) const;
   LinkTotals dayTotals(const DeviceLink& device) const;
   TrainTotals hourTrains() const;
@@ -240,6 +255,9 @@ class LinkMonitor {
   BucketClock<kHourBucketUs, kHourBuckets> hourClock_;
   BucketClock<kDayBucketUs, kDayBuckets> dayClock_;
   uint64_t windowsSinceUs_ = 0;
+  bool hasBaseline_ = false;
+  uint64_t baselineCoveredUs_ = 0;
+  uint64_t baselineTakenUs_ = 0;
   TrainTotals hourTrains_[kHourBuckets] = {};
   TrainTotals dayTrains_[kDayBuckets] = {};
 

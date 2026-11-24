@@ -60,9 +60,9 @@ The factory image also erases the Wi-Fi details, the token and the names.
 
 A node is updated from its own dashboard, without a cable:
 
-1. Download the `-app.bin` file for your board from the [releases](../../releases). The **Firmware** panel names it.
-2. Switch to monitor, and enter the admin token.
-3. Choose the file under **Firmware**, and press **Install**. It takes about a minute, and the settings stay.
+1. Download the `-app.bin` file for your board from the [releases](../../releases). **Settings → Firmware** names it.
+2. Enter the admin token at the top, and switch to monitor.
+3. Choose the file under **Settings → Firmware**, and press **Install**. It takes about a minute, and the settings stay.
 4. Do the same on the other node of a pair. Both must run the same version.
 
 The node refuses a damaged file, the factory image, and an image for the other kind of board. The old firmware stays in the other half of the flash. If the new one crashes before it has served the dashboard for 30 seconds, the old one starts again. If it hangs, or never reaches the Wi-Fi, unplug the node and plug it in again.
@@ -87,11 +87,12 @@ esptool.py --chip esp32s3 erase_region 0xe000 0x2000
 
    The setup network is open and has no password, so a nearby person could join it too. It only appears while no Wi-Fi is saved: once the board is set up it never opens again, even when your router is down, so nobody can use it later to change the token. To change the Wi-Fi or the token, press RESET and let go, then within 15 seconds press BOOT, hold it for about 5 seconds and let go. That erases all settings and opens the setup network once more. Do not hold BOOT while you press RESET or plug in the board: it then waits for a flash instead of starting.
 2. **Open the dashboard** at `http://tado-gado-xxxx.local/`, where `xxxx` is the end of the MAC address, at the IP address that your router or the serial port shows, or at `tado-gado-xxxx` with your router's own domain, such as `tado-gado-xxxx.lan`. The board answers to no other names, which keeps web pages from reaching it through DNS rebinding.
-3. **Check the radio.** The Radio panel must show a CC1101 version. If it says no CC1101 was found, check the wiring.
+   The dashboard has five tabs: **Overview** with advice, **Devices**, **Pair & radio**, **Live frames** and **Settings**. Enter the admin token once at the top; every tab can then change settings.
+3. **Check the radio.** **Pair & radio → Radio** must show a CC1101 version. If it says no CC1101 was found, check the wiring.
 4. **Find the channel.** Place the board near the bridge, enter your admin token, and start **Run survey**. Change a temperature in the Tado app while it runs. It takes 5 minutes. Then press **Apply best**.
 5. **Prove that it hears Tado.** **Verified ACKs** must rise above 0. Those frames carry a checksum that noise cannot produce, so this proves the radio settings fit your system. This matters most on V3, which nobody has tested. If it stays at 0, stop here.
-6. **Name your valves.** The dashboard knows a valve by its address. Press **Find valve**, then send Hello to one valve in the Tado app. The valve that gets a message from the bridge shows up, and **Name** stores a name for it. Do this one valve at a time, on a quiet moment. Names survive a restart. The dashboard cannot send Hello itself: the command is encrypted, and the device has no network key.
-7. **Measure for a day.** Valves with a low **Uplink ACK** or **Downlink ACK** rate, or many **Retries**, are the ones with a problem. If they all look fine, the problem is not range. See [Reading the measurements](#reading-the-measurements).
+6. **Name your valves.** The dashboard knows a valve by its address. Press **Find valve** under **Settings**, then send Hello to one valve in the Tado app. The valve that gets a message from the bridge shows up, and **Name** stores a name for it. Do this one valve at a time, on a quiet moment. Names survive a restart. The dashboard cannot send Hello itself: the command is encrypted, and the device has no network key.
+7. **Measure for a day.** Valves with a low **Uplink ACK** or **Downlink ACK** rate, or many **Retries**, are the ones with a problem, and **Overview** gives advice on them. If they all look fine, the problem is not range. See [Reading the measurements](#reading-the-measurements) and [Advice](#advice).
 
 For a valve the bridge cannot hear, **Uplink ACK** only means something when the board itself hears both the valve and the bridge, so place it between them.
 
@@ -99,14 +100,35 @@ For a valve the bridge cannot hear, **Uplink ACK** only means something when the
 
 ## Reading the measurements
 
-The device table counts over the **Last hour**, the **Last 24 hours**, or **Since start**. The hour and the day start again when the node switches between monitor and proxy, so they never mix the two. The line above the table says what the counts cover.
+The table under **Devices** counts over the **Last hour**, the **Last 24 hours**, or **Since start**. The hour and the day start again when the node switches between monitor and proxy, so they never mix the two. The line above the table says what the counts cover.
 
 - **Uplink ACK:** the share of a valve's frames that the bridge answered. Low means the bridge does not hear the valve.
 - **Downlink ACK:** the share of the bridge's frames that the valve answered. Below it, the same split by the wake-up train in front of the frame. A **short** train means the bridge knew when the valve listens; a **long** one means it did not. Misses after short trains point to timing, which the proxy can help with. Misses after long trains as well point to reception at the valve.
+- **Frames / h:** what the valve sent per hour. A valve that sends far more than the others often has weak batteries, or is stuck calibrating.
 - **Trains for it:** the wake-up trains for the valve that this node heard, in seconds.
 - **Tado bridge on air:** what this node heard the bridge send, frames and wake-up trains, as a share of the time. The band allows 1%. The node misses some frames, so the bridge sent at least this much.
-- **Had it** (valve node only): frames the node had to deliver that the valve had already answered to the bridge itself. A high count means the valve reaches the bridge often enough by itself. The bridge node answers the bridge for the valve too, with a frame that looks the same, so the valve node tells the two apart by strength alone. It learns how strongly it hears the bridge node, shown in the pair panel, and shows a dash for a valve it hears within 12 dB of that: there it cannot tell.
-- Devices heard once or twice, long ago, and never in traffic with the bridge are hidden. **Show rarely heard devices** shows them.
+- **Had it** (valve node only): frames the node had to deliver that the valve had already answered to the bridge itself. A high count means the valve reaches the bridge often enough by itself. The bridge node answers the bridge for the valve too, with a frame that looks the same, so the valve node tells the two apart by strength alone. It learns how strongly it hears the bridge node, shown under **Pair & radio**, and shows a dash for a valve it hears within 12 dB of that: there it cannot tell.
+- **Proxied:** the frames this node handled for the valve: the ones it answered itself, and the ones the other node gave it to deliver.
+- Devices heard once or twice, long ago, and never in traffic with the bridge are hidden. **Show rarely heard devices** shows them. The buttons above the table show only the devices with advice, the proxied ones, or the ones without a name.
+
+### Advice
+
+**Overview** lists advice from fixed rules, run on the node itself on what it counts. Each item shows the numbers it rests on. Advice that rests on a rate waits for 30 frames of a valve, so a quiet hour gives none rather than a wrong one. The node never changes a setting by itself: an advice with a button asks first, and needs the admin token.
+
+| Advice | When |
+|---|---|
+| Proxy it to the valve | Not proxied, and it answers less than 80% of the bridge's frames |
+| Proxy it to the bridge | Not proxied, and the bridge answers less than 80% of its frames |
+| Watch a weak link | It answers 80 to 90% of the bridge's frames |
+| The proxy is not needed | Valve node only: the valve had already answered 30% or more of the frames handed over for it |
+| Cannot tell | Valve node only: it cannot tell the valve's answers from the bridge node's. Shows the valve's rate in monitor mode just before the proxy started |
+| A valve keeps talking | It sends 60 or more frames an hour, and 4 times what the median valve sends |
+| Duty-cycle budget | Half of it or more used, with the valve that takes the most |
+| The bridge is busy | The bridge sends more than 1% of the time, with the valve it sends the most wake-up trains to |
+| Valves without a name | Valves in traffic with the bridge that have no name |
+| Slow ACKs | ACK latency p95 above 8 ms |
+
+When the node leaves monitor mode it keeps each valve's counts of that day window. A proxied valve's own ACK rates are not measured, so this is what the advice compares with. A spell of monitor shorter than 15 minutes, as when the other node was out of reach for a moment, does not replace it. It is gone after a restart.
 
 Only proxy valves the bridge cannot hear. If the bridge hears one too, its ACK and the proxy's ACK collide. The proxy serves at most 16 valves, though the duty cycle below will usually limit it first. The survey only runs in monitor mode.
 
@@ -120,7 +142,7 @@ One radio cannot send and receive at once, so one node is deaf during its own tr
 | **bridge** | Where it hears the bridge well | Answers the bridge, and delivers frames from the valves to it |
 | **valve** | Near the weak valves | Answers the valves, and wakes them to deliver frames from the bridge |
 
-Flash both boards and give them **the same admin token, on the same Wi-Fi network**. They find each other, and the node that hears the bridge best becomes the bridge node. A node that does not hear the bridge at all becomes the valve node, and learns the address of the bridge from its partner. The **Second node** panel shows what they decided. Roles do not change while proxying.
+Flash both boards and give them **the same admin token, on the same Wi-Fi network**. They find each other, and the node that hears the bridge best becomes the bridge node. A node that does not hear the bridge at all becomes the valve node, and learns the address of the bridge from its partner. **Pair & radio** shows what they decided, and the header links to the other node's dashboard. Roles do not change while proxying.
 
 Set the valves to proxy on either node, and the list goes to the other one. **Switch to proxy** on either node starts both, and **Switch to monitor** stops both.
 
@@ -143,7 +165,7 @@ Keep walls or a floor between the nodes. They share the channel with the bridge 
 ## Limits of the proxy
 
 - **Duty cycle:** the band allows 1%. The firmware stops at 0.9% (32.4 s per rolling hour). When that runs out it stops answering, and the valves fall back to their own retries. About 300 proxied commands per hour fill the budget of one node, so it suits a few weak valves, not a whole house. In a pair the valve node spends most of it, and the bridge node answers from its own budget.
-- **Where the budget goes:** **Airtime, last hour** in the device table shows what this node sent for each valve, and the share of its budget. A valve that takes a lot and reaches the bridge by itself is better left off the proxy.
+- **Where the budget goes:** **Airtime, last hour** under **Devices** shows what this node sent for each valve, and the share of its budget. A valve that takes a lot and reaches the bridge by itself is better left off the proxy.
 - **Deaf while sending:** the node hears nothing during its own wake-up train, which takes up to 1 s. Senders retry by themselves.
 - **Output power:** the default of about +11 dBm is close to the 25 mW e.r.p. limit of the band. Lower it for an antenna with gain, for example with `POST /api/radio` and `{"pa": 96}`. The value is a CC1101 PATABLE entry; 192 is the default.
 - **Unknowns:** nothing published says how long a valve waits for its ACK, and a proxy was never tried on a real bridge.

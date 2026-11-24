@@ -163,7 +163,17 @@ void ProxyEngine::onPeerFrame(bool uplink, const uint8_t* frame, size_t length, 
       // The other node ACKed a frame this node cannot take. Capacity in the Hellos
       // makes this rare; it shows on the dashboard when it happens.
       counters_.peerFramesDropped++;
-    } else if (!uplink && answeredDirectly_.contains(answerKey(device, data.seq), nowUs)) {
+      return;
+    }
+    DeviceLink* link = monitor_.mutableLink(device);
+    if (link != nullptr) {
+      if (uplink) {
+        link->handedUplinks++;
+      } else {
+        link->handedDownlinks++;
+      }
+    }
+    if (!uplink && answeredDirectly_.contains(answerKey(device, data.seq), nowUs)) {
       countAlreadyAnswered(*job);
     }
   }

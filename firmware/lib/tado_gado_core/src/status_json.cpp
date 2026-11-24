@@ -85,14 +85,6 @@ LinkTotals sinceBoot(const DeviceLink& d) {
   return t;
 }
 
-// The time a window covers: from the start of its oldest bucket or the latest reset.
-uint64_t coveredUs(uint64_t nowUs, uint64_t sinceUs, uint64_t bucketUs, size_t buckets) {
-  const uint64_t index = nowUs / bucketUs;
-  const uint64_t start = index >= buckets - 1 ? (index - (buckets - 1)) * bucketUs : 0;
-  const uint64_t from = start > sinceUs ? start : sinceUs;
-  return nowUs > from ? nowUs - from : 0;
-}
-
 const char* proxyDirection(const LinkMonitor& monitor, const uint8_t* prefix) {
   if (!monitor.isProxied(prefix)) {
     return "null";
@@ -174,12 +166,75 @@ void writeDevice(Writer& w, const DeviceLink& d, const LinkMonitor& monitor, con
   writeWindow(w, monitor.dayTotals(d));
   w.print(",\"total\":");
   writeWindow(w, sinceBoot(d));
+  w.print(",\"baseline\":");
+  uint64_t baselineUs = 0;
+  uint64_t takenUs = 0;
+  if (monitor.baseline(baselineUs, takenUs)) {
+    writeWindow(w, d.baseline);
+  } else {
+    w.print("null");
+  }
   w.print(
-      ",\"retransmissions\":%lu,\"proxied_uplinks\":%lu,\"proxied_downlinks\":%lu,"
-      "\"delivery_failures\":%lu,\"airtime_s\":%.2f,\"has_anchor\":%s}",
+      ",\"retransmissions\":%lu,\"proxied_uplinks\":%lu,\"proxied_downlinks\":%lu,\"handed_uplinks\":%lu,"
+      "\"handed_downlinks\":%lu,\"delivery_failures\":%lu,\"airtime_s\":%.2f,\"has_anchor\":%s}",
       static_cast<unsigned long>(d.retransmissions), static_cast<unsigned long>(d.proxiedUplinks),
-      static_cast<unsigned long>(d.proxiedDownlinks), static_cast<unsigned long>(d.deliveryFailures),
+      static_cast<unsigned long>(d.proxiedDownlinks), static_cast<unsigned long>(d.handedUplinks),
+      static_cast<unsigned long>(d.handedDownlinks), static_cast<unsigned long>(d.deliveryFailures),
       seconds(d.airtime.usedUs(nowUs)), engine != nullptr && engine->anchors().contains(d.prefix) ? "true" : "false");
+}
+
+// The numbers of each kind under their own names: advice.h says what they mean.
+void writeAdvice(Writer& w, const Advice& a) {
+  w.print("{\"kind\":\"%s\",\"level\":\"%s\",\"device\":", adviceKindName(a.kind), adviceLevelName(a.level));
+  if (a.hasDevice) {
+    w.prefix(a.device);
+  } else {
+    w.print("null");
+  }
+  const auto optionalRate = [&w](const char* key, float rate) {
+    if (rate < 0.0f) {
+      w.print(",\"%s\":null", key);
+    } else {
+      w.print(",\"%s\":%.3f", key, rate);
+    }
+  };
+  switch (a.kind) {
+    case AdviceKind::ProxyToValve:
+    case AdviceKind::WeakLink:
+      w.print(",\"rate\":%.3f,\"frames\":%lu,\"retries\":%lu", a.value, static_cast<unsigned long>(a.total),
+              static_cast<unsigned long>(a.count));
+      optionalRate("long_train_rate", a.extra);
+      break;
+    case AdviceKind::ProxyToBridge:
+      w.print(",\"rate\":%.3f,\"frames\":%lu", a.value, static_cast<unsigned long>(a.total));
+      break;
+    case AdviceKind::ProxyUnneeded:
+      w.print(",\"already_answered\":%lu,\"handed\":%lu,\"failed\":%lu,\"airtime_s\":%.2f",
+              static_cast<unsigned long>(a.count), static_cast<unsigned long>(a.total),
+              static_cast<unsigned long>(a.other), a.value);
+      break;
+    case AdviceKind::CannotJudge:
+      optionalRate("baseline_rate", a.value);
+      w.print(",\"baseline_frames\":%lu,\"airtime_s\":%.2f", static_cast<unsigned long>(a.total), a.extra);
+      break;
+    case AdviceKind::Chatty:
+      w.print(",\"per_hour\":%.1f,\"median_per_hour\":%.1f,\"frames\":%lu", a.value, a.extra,
+              static_cast<unsigned long>(a.total));
+      break;
+    case AdviceKind::DutyHigh:
+      w.print(",\"fraction\":%.3f,\"airtime_s\":%.2f", a.value, a.extra);
+      break;
+    case AdviceKind::BridgeBusy:
+      w.print(",\"fraction\":%.4f,\"train_s\":%.1f", a.value, a.extra);
+      break;
+    case AdviceKind::Unnamed:
+      w.print(",\"count\":%lu", static_cast<unsigned long>(a.count));
+      break;
+    case AdviceKind::SlowAcks:
+      w.print(",\"p95_ms\":%.2f", a.value);
+      break;
+  }
+  w.print("}");
 }
 
 void writeFrame(Writer& w, const RecentFrame& f, uint64_t nowUs) {
@@ -281,13 +336,28 @@ bool writeStatusJson(const StatusInput& input, char* out, size_t capacity) {
     w.print("],\"peer_answer_rssi_dbm\":null");
   }
   w.print(",\"windows\":{\"since_s\":%.1f,\"hour_s\":%.1f,\"day_s\":%.1f},\"trains\":{\"hour\":",
-          seconds(input.nowUs - monitor.windowsSinceUs()),
-          seconds(coveredUs(input.nowUs, monitor.windowsSinceUs(), kHourBucketUs, kHourBuckets)),
-          seconds(coveredUs(input.nowUs, monitor.windowsSinceUs(), kDayBucketUs, kDayBuckets)));
+          seconds(input.nowUs - monitor.windowsSinceUs()), seconds(monitor.hourCoveredUs(input.nowUs)),
+          seconds(monitor.dayCoveredUs(input.nowUs)));
   writeTrains(w, monitor.hourTrains());
   w.print(",\"day\":");
   writeTrains(w, monitor.dayTrains());
-  w.print("},\"recent_frames\":[");
+  uint64_t baselineUs = 0;
+  uint64_t takenUs = 0;
+  if (monitor.baseline(baselineUs, takenUs)) {
+    w.print("},\"baseline\":{\"covered_s\":%.1f,\"age_s\":%.1f}", seconds(baselineUs), seconds(input.nowUs - takenUs));
+  } else {
+    w.print("},\"baseline\":null");
+  }
+  w.print(",\"advice\":[");
+  Advice advice[kMaxAdvice];
+  const size_t adviceCount = computeAdvice({&monitor, engine, input.names, input.nowUs}, advice, kMaxAdvice);
+  for (size_t i = 0; i < adviceCount; i++) {
+    if (i > 0) {
+      w.print(",");
+    }
+    writeAdvice(w, advice[i]);
+  }
+  w.print("],\"recent_frames\":[");
   for (size_t i = 0; i < monitor.recentCount(); i++) {
     if (i > 0) {
       w.print(",");
