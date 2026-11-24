@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -2296,13 +2297,14 @@ std::vector<Advice> adviceOf(const LinkMonitor& monitor, const ProxyEngine* engi
   return std::vector<Advice>(out, out + count);
 }
 
-const Advice* adviceFor(const std::vector<Advice>& advice, AdviceKind kind) {
+// A copy, so it outlives the list it came from.
+std::optional<Advice> adviceFor(const std::vector<Advice>& advice, AdviceKind kind) {
   for (const Advice& a : advice) {
     if (a.kind == kind) {
-      return &a;
+      return a;
     }
   }
-  return nullptr;
+  return std::nullopt;
 }
 
 void test_advice_proxies_a_valve_that_misses_the_bridge() {
@@ -2310,8 +2312,8 @@ void test_advice_proxies_a_valve_that_misses_the_bridge() {
   monitor.setBridge(kBridge);
   exchanges(monitor, kFar, 40, 20, false);
   const std::vector<Advice> advice = adviceOf(monitor);
-  const Advice* a = adviceFor(advice, AdviceKind::ProxyToValve);
-  TEST_ASSERT_NOT_NULL(a);
+  const std::optional<Advice> a = adviceFor(advice, AdviceKind::ProxyToValve);
+  TEST_ASSERT_TRUE(a.has_value());
   TEST_ASSERT_EQUAL(AdviceLevel::Act, a->level);
   TEST_ASSERT_EQUAL_MEMORY(kFar, a->device, kPrefixLen);
   TEST_ASSERT_EQUAL_FLOAT(0.5f, a->value);
@@ -2322,7 +2324,7 @@ void test_advice_waits_for_enough_frames() {
   LinkMonitor monitor;
   monitor.setBridge(kBridge);
   exchanges(monitor, kFar, kAdviceMinFrames - 1, 0, false);
-  TEST_ASSERT_NULL(adviceFor(adviceOf(monitor), AdviceKind::ProxyToValve));
+  TEST_ASSERT_FALSE(adviceFor(adviceOf(monitor), AdviceKind::ProxyToValve).has_value());
 }
 
 void test_advice_watches_a_link_between_80_and_90_percent() {
@@ -2330,9 +2332,9 @@ void test_advice_watches_a_link_between_80_and_90_percent() {
   monitor.setBridge(kBridge);
   exchanges(monitor, kFar, 40, 34, false);
   const std::vector<Advice> advice = adviceOf(monitor);
-  TEST_ASSERT_NULL(adviceFor(advice, AdviceKind::ProxyToValve));
-  const Advice* a = adviceFor(advice, AdviceKind::WeakLink);
-  TEST_ASSERT_NOT_NULL(a);
+  TEST_ASSERT_FALSE(adviceFor(advice, AdviceKind::ProxyToValve).has_value());
+  const std::optional<Advice> a = adviceFor(advice, AdviceKind::WeakLink);
+  TEST_ASSERT_TRUE(a.has_value());
   TEST_ASSERT_EQUAL(AdviceLevel::Watch, a->level);
   TEST_ASSERT_EQUAL_FLOAT(0.85f, a->value);
 }
@@ -2341,8 +2343,8 @@ void test_advice_proxies_a_valve_the_bridge_misses() {
   LinkMonitor monitor;
   monitor.setBridge(kBridge);
   exchanges(monitor, kFar, 40, 20, true);
-  const Advice* a = adviceFor(adviceOf(monitor), AdviceKind::ProxyToBridge);
-  TEST_ASSERT_NOT_NULL(a);
+  const std::optional<Advice> a = adviceFor(adviceOf(monitor), AdviceKind::ProxyToBridge);
+  TEST_ASSERT_TRUE(a.has_value());
   TEST_ASSERT_EQUAL_FLOAT(0.5f, a->value);
 }
 
@@ -2378,8 +2380,8 @@ void test_advice_finds_a_valve_that_keeps_talking() {
   LinkMonitor monitor;
   monitor.setBridge(kBridge);
   talkers(monitor, 60 * kMinute);
-  const Advice* a = adviceFor(adviceOf(monitor, nullptr, nullptr, 61 * kMinute), AdviceKind::Chatty);
-  TEST_ASSERT_NOT_NULL(a);
+  const std::optional<Advice> a = adviceFor(adviceOf(monitor, nullptr, nullptr, 61 * kMinute), AdviceKind::Chatty);
+  TEST_ASSERT_TRUE(a.has_value());
   TEST_ASSERT_EQUAL_MEMORY(kFar, a->device, kPrefixLen);
   TEST_ASSERT_FLOAT_WITHIN(1.0f, 98.4f, a->value);
   TEST_ASSERT_FLOAT_WITHIN(0.5f, 9.8f, a->extra);
@@ -2389,7 +2391,7 @@ void test_advice_needs_a_quarter_of_an_hour_for_rates_per_hour() {
   LinkMonitor monitor;
   monitor.setBridge(kBridge);
   talkers(monitor, 10 * kMinute);
-  TEST_ASSERT_NULL(adviceFor(adviceOf(monitor, nullptr, nullptr, 11 * kMinute), AdviceKind::Chatty));
+  TEST_ASSERT_FALSE(adviceFor(adviceOf(monitor, nullptr, nullptr, 11 * kMinute), AdviceKind::Chatty).has_value());
 }
 
 void test_advice_counts_valves_without_a_name() {
@@ -2401,8 +2403,8 @@ void test_advice_counts_valves_without_a_name() {
   const uint8_t rare[kPrefixLen] = {0xA0, 0, 0, 0, 0x20};
   exchanges(monitor, rare, 3, 3, true, 20000000);
   TEST_ASSERT_TRUE(names.set(kOther, "Study"));
-  const Advice* a = adviceFor(adviceOf(monitor, nullptr, &names), AdviceKind::Unnamed);
-  TEST_ASSERT_NOT_NULL(a);
+  const std::optional<Advice> a = adviceFor(adviceOf(monitor, nullptr, &names), AdviceKind::Unnamed);
+  TEST_ASSERT_TRUE(a.has_value());
   TEST_ASSERT_EQUAL_UINT32(1, a->count);
 }
 
@@ -2414,8 +2416,8 @@ void test_advice_sees_a_busy_bridge() {
   DeviceLink& bridge = *monitor.mutableLink(kBridge);
   bridge.day[0].airtimeUs = 20000000;  // 20 s in half an hour: 1.1%.
   monitor.mutableLink(kOther)->day[0].trainUs = 9000000;
-  const Advice* a = adviceFor(adviceOf(monitor, nullptr, nullptr, 30 * kMinute), AdviceKind::BridgeBusy);
-  TEST_ASSERT_NOT_NULL(a);
+  const std::optional<Advice> a = adviceFor(adviceOf(monitor, nullptr, nullptr, 30 * kMinute), AdviceKind::BridgeBusy);
+  TEST_ASSERT_TRUE(a.has_value());
   TEST_ASSERT_EQUAL(AdviceLevel::Info, a->level);
   TEST_ASSERT_EQUAL_MEMORY(kOther, a->device, kPrefixLen);
   TEST_ASSERT_FLOAT_WITHIN(0.001f, 20.0f / 1800.0f, a->value);
@@ -2429,8 +2431,8 @@ void test_advice_warns_before_the_duty_budget_runs_out() {
   exchanges(monitor, kFar, 5, 5, false);
   monitor.mutableLink(kFar)->airtime.record(20000000, port.clock);
   engine.duty().record(DutyCycleLimiter::kBudgetUs * 3 / 4, port.clock);
-  const Advice* a = adviceFor(adviceOf(monitor, &engine, nullptr, port.clock), AdviceKind::DutyHigh);
-  TEST_ASSERT_NOT_NULL(a);
+  const std::optional<Advice> a = adviceFor(adviceOf(monitor, &engine, nullptr, port.clock), AdviceKind::DutyHigh);
+  TEST_ASSERT_TRUE(a.has_value());
   TEST_ASSERT_EQUAL(AdviceLevel::Watch, a->level);
   TEST_ASSERT_EQUAL_MEMORY(kFar, a->device, kPrefixLen);
   TEST_ASSERT_FLOAT_WITHIN(0.01f, 20.0f, a->extra);
@@ -2473,11 +2475,11 @@ void test_advice_turns_off_a_proxy_the_valve_does_not_need() {
   DeviceLink& link = *monitor.mutableLink(kFar);
   link.handedDownlinks = 40;
   link.alreadyAnswered = 11;
-  TEST_ASSERT_NULL(adviceFor(adviceOf(monitor, &engine), AdviceKind::ProxyUnneeded));  // 27.5%
+  TEST_ASSERT_FALSE(adviceFor(adviceOf(monitor, &engine), AdviceKind::ProxyUnneeded).has_value());  // 27.5%
   link.alreadyAnswered = 12;
   link.deliveryFailures = 3;
-  const Advice* a = adviceFor(adviceOf(monitor, &engine), AdviceKind::ProxyUnneeded);
-  TEST_ASSERT_NOT_NULL(a);
+  const std::optional<Advice> a = adviceFor(adviceOf(monitor, &engine), AdviceKind::ProxyUnneeded);
+  TEST_ASSERT_TRUE(a.has_value());
   TEST_ASSERT_EQUAL(AdviceLevel::Act, a->level);
   TEST_ASSERT_EQUAL_UINT32(12, a->count);
   TEST_ASSERT_EQUAL_UINT32(40, a->total);
@@ -2493,9 +2495,9 @@ void test_advice_says_when_it_cannot_judge_a_proxied_valve() {
   startValveNode(monitor, engine, port, -76.0f);
   TEST_ASSERT_FALSE(engine.canTellOwnAnswer(kFar));
   const std::vector<Advice> advice = adviceOf(monitor, &engine);
-  TEST_ASSERT_NULL(adviceFor(advice, AdviceKind::ProxyUnneeded));
-  const Advice* a = adviceFor(advice, AdviceKind::CannotJudge);
-  TEST_ASSERT_NOT_NULL(a);
+  TEST_ASSERT_FALSE(adviceFor(advice, AdviceKind::ProxyUnneeded).has_value());
+  const std::optional<Advice> a = adviceFor(advice, AdviceKind::CannotJudge);
+  TEST_ASSERT_TRUE(a.has_value());
   TEST_ASSERT_EQUAL(AdviceLevel::Info, a->level);
   TEST_ASSERT_EQUAL_FLOAT(0.75f, a->value);
   TEST_ASSERT_EQUAL_UINT32(40, a->total);
