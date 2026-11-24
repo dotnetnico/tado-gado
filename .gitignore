@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+dist/
+.ruff_cache/
+*.jsonl
+.env
+
+# PlatformIO
+firmware/.pio/
+firmware/src/generated/
+*.bin
+.vscode/

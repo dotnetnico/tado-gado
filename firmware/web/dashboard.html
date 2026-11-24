@@ -1,0 +1,603 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tado-gado Relay</title>
+<style>
+  :root {
+    --bg: #f6f7f8; --panel: #ffffff; --text: #1b1f24; --muted: #5f6b76;
+    --line: #dfe3e7; --accent: #0b6bcb; --good: #1a7f4b; --warn: #a86400; --bad: #c0362c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171a; --panel: #1d2125; --text: #e7eaed; --muted: #9aa5af;
+      --line: #30363c; --accent: #5aa9f0; --good: #4cc38a; --warn: #e0a84a; --bad: #f0786c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1280px; margin: 0 auto; padding: 16px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 16px; }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 15px; margin: 0 0 8px; }
+  .pill { padding: 2px 10px; border-radius: 999px; font-size: 13px; font-weight: 600;
+          border: 1px solid var(--line); background: var(--panel); }
+  .pill.proxy { color: var(--good); border-color: var(--good); }
+  .pill.monitor { color: var(--accent); border-color: var(--accent); }
+  .pill.stale { color: var(--bad); border-color: var(--bad); }
+  .muted { color: var(--muted); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 16px; }
+  .tile, .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+  .panel { margin-bottom: 16px; }
+  .tile .value { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tile .label { font-size: 13px; color: var(--muted); }
+  .bar { height: 6px; border-radius: 3px; background: var(--line); margin-top: 6px; overflow: hidden; }
+  .bar > span { display: block; height: 100%; background: var(--good); }
+  .bar > span.warn { background: var(--warn); }
+  .bar > span.bad { background: var(--bad); }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th { text-align: left; font-size: 12px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+  th, td { padding: 6px 10px 6px 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  td.mono { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+  .good { color: var(--good); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+  button { font: inherit; padding: 4px 10px; border-radius: 6px; cursor: pointer;
+           border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  button.on { border-color: var(--good); color: var(--good); }
+  button:disabled { cursor: not-allowed; opacity: .55; }
+  input { font: inherit; padding: 4px 8px; border-radius: 6px; width: 170px;
+          border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  select { font: inherit; padding: 3px 6px; border-radius: 6px;
+           border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  select.on { border-color: var(--good); color: var(--good); }
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .between { justify-content: space-between; margin-bottom: 8px; }
+  .between h2 { margin: 0; }
+  .seg button.active { border-color: var(--accent); color: var(--accent); }
+  .sub { font-size: 12px; color: var(--muted); }
+  .tile .sub { margin-top: 4px; }
+  #error { color: var(--bad); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Tado-gado Relay</h1>
+    <span id="mode" class="pill">connecting</span>
+    <span id="role" class="muted"></span>
+    <span id="uptime" class="muted"></span>
+  </header>
+
+  <section class="grid">
+    <div class="tile"><div class="value" id="rx">-</div><div class="label">Frames received</div></div>
+    <div class="tile"><div class="value" id="crc">-</div><div class="label">CRC errors</div></div>
+    <div class="tile"><div class="value" id="verified">-</div><div class="label">Verified ACKs (proof of real traffic)</div></div>
+    <div class="tile"><div class="value" id="relayed">-</div><div class="label">Frames delivered</div></div>
+    <div class="tile"><div class="value" id="failed">-</div><div class="label">Deliveries failed</div></div>
+    <div class="tile"><div class="value" id="latency">-</div><div class="label">ACK latency p95 (target 5-8 ms)</div></div>
+    <div class="tile">
+      <div class="value" id="duty">-</div>
+      <div class="label">Duty cycle budget used</div>
+      <div class="bar"><span id="dutybar" style="width:0"></span></div>
+    </div>
+    <div class="tile" id="bridgeTile" hidden title="Frames and wake-up trains this node heard from the Tado bridge. What it missed is not in it, so the bridge sent at least this much. The band allows 1%.">
+      <div class="value" id="bridgeAir">-</div>
+      <div class="label" id="bridgeAirLabel">Tado bridge on air</div>
+      <div class="sub" id="trainsHeard"></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="controls between">
+      <h2>Devices</h2>
+      <div class="controls seg" id="windowPicker">
+        <button data-window="hour" class="active">Last hour</button>
+        <button data-window="day">Last 24 hours</button>
+        <button data-window="total">Since start</button>
+      </div>
+    </div>
+    <p class="muted" id="windowNote"></p>
+    <p class="muted" data-locked hidden></p>
+    <div class="scroll">
+      <table>
+        <thead><tr>
+          <th>Device</th><th>RSSI</th><th>Last seen</th><th title="Frames of the device that the bridge answered">Uplink ACK</th>
+          <th title="Frames of the bridge that the device answered. Below: behind a short wake-up train, when the bridge knew when the device listens, and behind a long one, when it did not">Downlink ACK</th><th>Retries</th>
+          <th title="Wake-up trains for the device that this node heard, from any sender">Trains for it</th>
+          <th>Proxied</th><th>Failed</th><th class="valveOnly" title="Frames this node got to deliver that the device had already answered to the bridge itself. A dash: this node hears the device and the bridge node at about the same strength, so it cannot tell their answers apart">Had it</th>
+          <th title="What this node sent for the device, out of its own budget">Airtime, last hour</th><th>Proxy</th>
+        </tr></thead>
+        <tbody id="devices"><tr><td colspan="12" class="muted">No devices heard yet.</td></tr></tbody>
+      </table>
+    </div>
+    <p><button id="rareButton" hidden></button></p>
+  </section>
+
+  <section class="panel">
+    <h2>Find a valve</h2>
+    <p class="muted">Press Find, then send Hello to one valve in the Tado app. The valve that gets a message from the bridge shows up here.</p>
+    <p class="muted" data-locked hidden></p>
+    <div class="controls">
+      <button id="findButton">Find valve</button>
+      <span id="findState" class="muted"></span>
+    </div>
+    <div class="scroll" id="findTable" hidden>
+      <table>
+        <thead><tr><th>Device</th><th>Message from bridge</th><th>RSSI</th><th></th></tr></thead>
+        <tbody id="findResults"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel" id="pairPanel" hidden>
+    <h2>Second node</h2>
+    <p id="pairState" class="muted"></p>
+  </section>
+
+  <section class="panel">
+    <h2>Control</h2>
+    <div class="controls">
+      <input id="token" type="password" placeholder="Admin token" autocomplete="off" aria-label="Admin token">
+      <button id="modeButton" disabled>Switch mode</button>
+      <span id="readonly" class="muted"></span>
+      <span id="error"></span>
+    </div>
+  </section>
+
+  <section class="panel" id="radioPanel" hidden>
+    <h2>Radio</h2>
+    <p id="radioState" class="muted"></p>
+    <div class="controls">
+      <button id="surveyButton" disabled>Run survey (5 min)</button>
+      <button id="applyButton" disabled hidden>Apply best</button>
+      <span id="surveyState" class="muted"></span>
+    </div>
+    <div class="scroll" id="surveyTable" hidden>
+      <table>
+        <thead><tr><th>Channel</th><th>Trim</th><th>Frames</th><th>CRC OK</th></tr></thead>
+        <tbody id="survey"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel" id="updatePanel" hidden>
+    <h2>Firmware</h2>
+    <p id="firmware" class="muted"></p>
+    <p class="muted">Download the file <span class="mono">tado-gado-<span id="variant"></span>-&hellip;-app.bin</span> of a release, and install it here. The node restarts in monitor mode and keeps its settings. Update both nodes of a pair.</p>
+    <div class="controls">
+      <input id="updateFile" type="file" accept=".bin" aria-label="Firmware file">
+      <button id="updateButton" disabled>Install</button>
+      <span id="updateState" class="muted"></span>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Recent frames</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Age</th><th>Class</th><th>Seq</th><th>Source</th><th>Destination</th><th>Bytes</th><th>RSSI</th></tr></thead>
+        <tbody id="frames"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let state = null;
+
+const FIND_SECONDS = 60;
+let findStarted = null;
+
+function text(value, suffix = '') { return value === null || value === undefined ? '-' : value + suffix; }
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+}
+
+function label(device) {
+  const named = state && state.devices.find(d => d.device === device);
+  return named && named.name ? escapeHtml(named.name) : device === null ? '-' : escapeHtml(device);
+}
+
+function nameButton(d, canName) {
+  return `<button data-rename="${escapeHtml(d.device)}" data-current="${escapeHtml(d.name || '')}" ${canName ? '' : 'disabled'}>Name</button>`;
+}
+
+function duration(seconds) {
+  const h = Math.floor(seconds / 3600), m = Math.floor(seconds % 3600 / 60);
+  return `up ${h}h ${m}m ${seconds % 60}s`;
+}
+
+function rateOf(acked, unacked) {
+  const total = acked + unacked;
+  return total ? acked / total : null;
+}
+
+function percent(rate) { return rate === null ? '-' : `${Math.round(rate * 100)}%`; }
+
+function rateCell(acked, unacked, below = '') {
+  const rate = rateOf(acked, unacked);
+  const title = `${acked} of ${acked + unacked} answered`;
+  if (rate === null) return `<td class="muted">-${below}</td>`;
+  const cls = rate >= 0.9 ? 'good' : rate >= 0.6 ? 'warn' : 'bad';
+  return `<td title="${title}"><span class="${cls}">${percent(rate)}</span>${below}</td>`;
+}
+
+function rssiClass(rssi) {
+  if (rssi === null) return '';
+  return rssi >= -85 ? 'good' : rssi >= -97 ? 'warn' : 'bad';
+}
+
+function airtime(used) {
+  if (!used) return '-';
+  return `${used.toFixed(1)} s (${(used / state.duty_cycle.budget_s * 100).toFixed(0)}%)`;
+}
+
+// The order of the arrays "hour", "day" and "total" of a device in the status.
+const C = { up: 0, upAcked: 1, upUnacked: 2, down: 3, downAcked: 4, downUnacked: 5, retries: 6,
+            longAcked: 7, longUnacked: 8, sentS: 9, trainsS: 10 };
+let windowKey = 'hour';
+let showRare = false;
+const WINDOW_NAMES = { hour: 'last hour', day: 'last 24 hours', total: 'since start' };
+
+// Older firmware has no windows: then everything counts since start.
+function countsOf(d) {
+  if (d[windowKey]) return d[windowKey];
+  const n = (count, rate) => rate === null ? [0, 0] : [Math.round(count * rate), count - Math.round(count * rate)];
+  const [ua, uu] = n(d.uplinks, d.uplink_ack_rate), [da, du] = n(d.downlinks, d.downlink_ack_rate);
+  return [d.uplinks, ua, uu, d.downlinks, da, du, d.retransmissions, 0, 0, 0, 0];
+}
+
+// Heard once or twice, long ago, never in traffic with the bridge and never chosen: a
+// stray frame, kept out of the way.
+function rare(d) {
+  return d.kind !== 'bridge' && !d.proxied && !d.name && d.frames <= 2 && d.uplinks === 0 && d.downlinks === 0
+    && (d.seconds_since_seen === null || d.seconds_since_seen > 600);
+}
+
+function downlinkBelow(c) {
+  const longRate = rateOf(c[C.longAcked], c[C.longUnacked]);
+  const shortRate = rateOf(c[C.downAcked] - c[C.longAcked], c[C.downUnacked] - c[C.longUnacked]);
+  if (longRate === null && shortRate === null) return '';
+  return `<div class="sub">short ${percent(shortRate)} · long ${percent(longRate)}</div>`;
+}
+
+function proxySelect(d, canControl) {
+  const value = !d.proxied ? 'off' : ['downlink', 'uplink'].includes(d.proxy_direction) ? d.proxy_direction : 'both';
+  const option = (v, label) => `<option value="${v}" ${v === value ? 'selected' : ''}>${label}</option>`;
+  return `<select data-device="${escapeHtml(d.device)}" class="${d.proxied ? 'on' : ''}" ${canControl ? '' : 'disabled'}
+      aria-label="Proxy for ${escapeHtml(d.name || d.device)}">
+    ${option('off', 'Off')}${option('both', 'Both ways')}${option('downlink', 'To the valve only')}${option('uplink', 'To the bridge only')}</select>`;
+}
+
+function deviceRow(d, canControl, canName, valveNode) {
+  const c = countsOf(d);
+  const proxy = d.kind === 'bridge' ? '<span class="muted">bridge</span>' : proxySelect(d, canControl);
+  const fromPeer = d.acks_from_peer ? ` title="${d.acks_from_peer} answers since start were heard only by the other node"` : '';
+  return `<tr>
+    <td>${d.name ? `<strong>${escapeHtml(d.name)}</strong><br>` : ''}<span class="mono">${escapeHtml(d.device)}</span>
+      ${d.kind === 'bridge' ? '' : nameButton(d, canName)}</td>
+    <td class="${rssiClass(d.rssi_dbm)}" title="LQI ${text(d.lqi)}">${text(d.rssi_dbm, ' dBm')}</td>
+    <td>${text(d.seconds_since_seen, ' s')}</td>
+    ${rateCell(c[C.upAcked], c[C.upUnacked])}${rateCell(c[C.downAcked], c[C.downUnacked], downlinkBelow(c))}
+    <td${fromPeer}>${c[C.retries]}</td>
+    <td>${windowKey === 'total' || !c[C.trainsS] ? '-' : c[C.trainsS].toFixed(1) + ' s'}</td>
+    <td>${d.proxied_uplinks + d.proxied_downlinks}</td>
+    <td class="${d.delivery_failures ? 'bad' : ''}">${d.delivery_failures}</td>
+    ${valveNode ? `<td>${text(d.already_answered)}</td>` : ''}
+    <td>${airtime(d.airtime_s)}</td>
+    <td>${proxy}</td></tr>`;
+}
+
+function minutes(seconds) {
+  return seconds < 5400 ? `${Math.round(seconds / 60)} minutes` : `${(seconds / 3600).toFixed(1)} hours`;
+}
+
+function renderWindow(s) {
+  for (const button of document.querySelectorAll('#windowPicker button')) {
+    button.classList.toggle('active', button.dataset.window === windowKey);
+  }
+  const w = s.windows, shared = s.pair && s.pair.peer_alive ? ' Answers heard by either node count.' : '';
+  if (!w) {
+    $('windowNote').textContent = 'Counts since start.' + shared;
+    return;
+  }
+  const covered = windowKey === 'total' ? s.uptime_seconds : w[windowKey + '_s'];
+  const reset = windowKey !== 'total' && w.since_s <= covered + 1 && w.since_s + 5 < s.uptime_seconds;
+  $('windowNote').textContent = (windowKey === 'total' ? `Counts since start, ${minutes(s.uptime_seconds)} ago.`
+    : reset ? `Counts since the switch of mode, ${minutes(w.since_s)} ago.`
+    : `Counts of the last ${minutes(covered)}.`) + shared;
+}
+
+// What the Tado bridge sent, as this node heard it, in the hour or day window.
+function renderBridge(s) {
+  const bridge = s.devices.find(d => d.kind === 'bridge');
+  const key = windowKey === 'day' ? 'day' : 'hour';
+  $('bridgeTile').hidden = !bridge || !bridge[key] || !s.windows;
+  if ($('bridgeTile').hidden) return;
+  const sent = bridge[key][C.sentS], covered = s.windows[key + '_s'];
+  $('bridgeAir').textContent = covered > 0 ? `${(sent / covered * 100).toFixed(1)}%` : '-';
+  $('bridgeAirLabel').textContent = `Tado bridge on air, ${WINDOW_NAMES[key]}: ${sent.toFixed(0)} s`;
+  const t = s.trains[key];
+  $('trainsHeard').textContent = `Wake-up trains heard: bridge ${t[0].toFixed(0)} s, other node ${t[1].toFixed(0)} s, unknown ${t[2].toFixed(0)} s`;
+}
+
+function renderDevices(s, canControl, unlocked) {
+  // A list open in the table would close when the table is drawn again.
+  if (document.activeElement && document.activeElement.closest('#devices select')) return;
+  const valveNode = s.role === 'valve';
+  for (const cell of document.querySelectorAll('.valveOnly')) cell.hidden = !valveNode;
+  const hidden = s.devices.filter(rare).length;
+  const shown = showRare ? s.devices : s.devices.filter(d => !rare(d));
+  $('rareButton').hidden = hidden === 0;
+  $('rareButton').textContent = showRare ? 'Hide rarely heard devices' : `Show ${hidden} rarely heard ${hidden === 1 ? 'device' : 'devices'}`;
+  $('devices').innerHTML = shown.length ? shown.map(d => deviceRow(d, canControl, unlocked, valveNode)).join('')
+    : '<tr><td colspan="12" class="muted">No devices heard yet.</td></tr>';
+}
+
+function frameRow(f) {
+  return `<tr><td>${f.age_s} s</td><td>${escapeHtml(f.class)}</td><td>${text(f.seq)}</td>
+    <td class="mono">${label(f.src)}</td><td class="mono">${label(f.dst)}</td>
+    <td>${f.length}</td><td>${f.rssi_dbm} dBm</td></tr>`;
+}
+
+function renderRadio(s, unlocked) {
+  $('radioPanel').hidden = !s.radio;
+  if (!s.radio) return;
+  const r = s.radio, survey = s.survey;
+  const memory = s.memory && s.memory.free ? `, ${Math.round(s.memory.free / 1024)} kB free (lowest ${Math.round(s.memory.min_free / 1024)} kB)` : '';
+  $('radioState').textContent = r.found
+    ? `CC1101 version ${r.version}, channel ${r.channel}, trim ${r.fsctrl0}, firmware ${s.firmware}${memory}`
+    : `No CC1101 found. Check the wiring. Firmware ${s.firmware}${memory}.`;
+  const running = survey && survey.running, best = survey && survey.best;
+  $('surveyButton').disabled = !unlocked || running || !r.found || s.mode === 'proxy';
+  $('applyButton').hidden = !best;
+  $('applyButton').disabled = !unlocked;
+  $('surveyState').textContent = running ? `Step ${survey.step + 1} of ${survey.steps}. Change a temperature in the Tado app now.`
+    : best ? `Best: channel ${best.channel}, trim ${best.fsctrl0}`
+    : survey && survey.finished ? 'No frame passed the CRC.' : '';
+  const results = survey ? survey.results : [];
+  $('surveyTable').hidden = results.length === 0;
+  $('survey').innerHTML = results.map(x =>
+    `<tr><td>${x.channel}</td><td>${x.fsctrl0}</td><td>${x.frames}</td><td>${x.crc_ok}</td></tr>`).join('');
+}
+
+function renderPair(s) {
+  $('pairPanel').hidden = !s.pair;
+  if (!s.pair) return;
+  const p = s.pair, signal = value => value === null ? 'does not hear the bridge' : `hears the bridge at ${value} dBm`;
+  const roles = { bridge: 'This node is the bridge node.', valve: 'This node is the valve node.' };
+  $('pairState').textContent = !p.peer ? 'No second node found. Give it the same admin token, on the same network.'
+    : !p.peer_alive ? `Lost contact with node ${p.peer}.`
+    : `Node ${p.peer} ${signal(p.peer_bridge_rssi)}. This node ${signal(p.own_bridge_rssi)}. `
+      + (roles[s.role] || 'At least one node must hear the bridge before roles can be chosen.')
+      + ' The two share the names of the devices, and the answers each of them hears.'
+      + (s.role === 'valve' && s.peer_answer_rssi_dbm !== null && s.peer_answer_rssi_dbm !== undefined
+        ? ` This node hears the other one answer the bridge at ${s.peer_answer_rssi_dbm} dBm.` : '');
+}
+
+// Only the bridge can make a valve show Hello, so the search needs no transmitter:
+// it lists the devices that got a message after the button was pressed.
+function renderFind(s, unlocked) {
+  if (findStarted === null) return;
+  const elapsed = (Date.now() - findStarted) / 1000;
+  if (elapsed > FIND_SECONDS) {
+    findStarted = null;
+    $('findButton').textContent = 'Find valve';
+    $('findState').textContent = 'Stopped.';
+    return;
+  }
+  const hits = s.devices
+    .filter(d => d.kind !== 'bridge' && d.downlink_age_s !== null && d.downlink_age_s < elapsed)
+    .sort((a, b) => a.downlink_age_s - b.downlink_age_s);
+  $('findState').textContent = !s.bridge ? 'The bridge has not been found yet.'
+    : hits.length ? 'If several appear, the bridge was also sending something else. Press Find and try again.'
+    : `Listening, ${Math.ceil(FIND_SECONDS - elapsed)} s left. Send Hello now.`;
+  $('findTable').hidden = hits.length === 0;
+  $('findResults').innerHTML = hits.map(d => `<tr>
+    <td>${d.name ? `<strong>${escapeHtml(d.name)}</strong> ` : ''}<span class="mono">${escapeHtml(d.device)}</span></td>
+    <td>${d.downlink_age_s} s ago</td><td>${text(d.rssi_dbm, ' dBm')}</td>
+    <td>${nameButton(d, unlocked)}</td></tr>`).join('');
+}
+
+let updating = false;
+
+function renderUpdate(s, unlocked) {
+  $('updatePanel').hidden = !s.variant;
+  if (!s.variant) return;
+  $('firmware').textContent = `Version ${s.firmware}` + (s.unconfirmed
+    ? ', just installed. It is kept once it has worked for 30 seconds.' : '');
+  $('variant').textContent = s.variant;
+  $('updateButton').disabled = updating || !unlocked || s.mode === 'proxy' || s.unconfirmed || !$('updateFile').files.length;
+  if (!updating && s.mode === 'proxy') $('updateState').textContent = 'Switch to monitor first.';
+  else if (!updating && $('updateState').textContent === 'Switch to monitor first.') $('updateState').textContent = '';
+}
+
+// What the node checks too, but before a minute of uploading.
+function inspectImage(bytes, s) {
+  const word = new DataView(bytes.buffer);
+  if (bytes.length < 36 || bytes[0] !== 0xE9) return { error: 'This is not a firmware image.' };
+  if (word.getUint32(32, true) !== 0xABCD5432) return { error: 'This is the factory image. Use the file that ends in -app.bin.' };
+  const found = /tado-gado-image:([a-z0-9]{1,15}):([0-9.]{1,15})\0/.exec(new TextDecoder('latin1').decode(bytes));
+  if (!found) return { error: 'This is not a tado-gado image of v0.11.0 or later.' };
+  if (found[1] !== s.variant) return { error: `This image is for another board: ${found[1]}.` };
+  return { version: found[2] };
+}
+
+function sendImage(file) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open('POST', '/api/update');
+    request.setRequestHeader('X-Admin-Token', $('token').value);
+    request.upload.onprogress = event => {
+      $('updateState').textContent = `Sending, ${Math.round(event.loaded / event.total * 100)}%`;
+    };
+    request.onload = () => request.status === 200 ? resolve() : reject(new Error(request.responseText));
+    request.onerror = () => reject(new Error('The connection was lost. Nothing has changed.'));
+    request.send(file);
+  });
+}
+
+// The new firmware is kept after 30 s, so only then is the answer final.
+async function watchRestart(version) {
+  const sentAt = Date.now();
+  for (let i = 0; i < 60; i++) {
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    try {
+      const response = await fetch('/api/status', { signal: AbortSignal.timeout(4000) });
+      const s = await response.json();
+      if (s.uptime_seconds * 1000 >= Date.now() - sentAt) continue;  // Not restarted yet.
+      if (s.firmware !== version) return `The node runs ${s.firmware}: version ${version} did not start, so it went back.`;
+      if (!s.unconfirmed && s.uptime_seconds > 20) return `Version ${version} is installed.`;
+      $('updateState').textContent = `Version ${version} started. Checking it.`;
+    } catch (e) {
+      $('updateState').textContent = 'Restarting.';
+    }
+  }
+  return 'The node did not come back. Unplug it and plug it in again: it then returns to the old firmware.';
+}
+
+async function install() {
+  const file = $('updateFile').files[0], from = state;
+  updating = true;
+  render(state);
+  try {
+    const image = inspectImage(new Uint8Array(await file.arrayBuffer()), from);
+    if (image.error) throw new Error(image.error);
+    if (!confirm(`Install version ${image.version}? This node runs ${from.firmware}.`)) throw new Error('');
+    // Asked first: a browser that is still sending does not show a refusal.
+    const ready = await fetch('/api/update', { method: 'POST', headers: { 'X-Admin-Token': $('token').value } });
+    if (!ready.ok) throw new Error(await ready.text());
+    await sendImage(file);
+    $('updateState').textContent = 'Restarting.';
+    $('updateState').textContent = await watchRestart(image.version);
+  } catch (e) {
+    $('updateState').textContent = e.message;
+  }
+  updating = false;
+  render(state);
+}
+
+function render(s) {
+  state = s;
+  const unlocked = !s.read_only && $('token').value !== '';
+  const c = s.counters, canControl = unlocked && s.proxy_available !== false;
+  renderRadio(s, unlocked);
+  renderUpdate(s, unlocked);
+  $('modeButton').hidden = s.proxy_available === false;
+  const nodeMode = s.node_mode || s.mode;
+  renderPair(s);
+  $('mode').textContent = nodeMode;
+  $('mode').className = 'pill ' + (nodeMode === 'monitor' ? 'monitor' : nodeMode === 'waiting' ? 'stale' : 'proxy');
+  $('role').textContent = `role: ${s.role} · bridge: ${s.bridge || 'not found yet'}`;
+  $('uptime').textContent = duration(s.uptime_seconds);
+  $('rx').textContent = c.frames_rx.toLocaleString();
+  $('crc').textContent = c.crc_errors.toLocaleString();
+  $('verified').textContent = c.verified_acks.toLocaleString();
+  $('relayed').textContent = (c.uplinks_forwarded + c.downlinks_delivered).toLocaleString();
+  $('failed').textContent = c.deliveries_failed.toLocaleString();
+  $('latency').textContent = s.ack_latency_ms ? s.ack_latency_ms.p95 + ' ms' : '-';
+  const used = s.duty_cycle.fraction_used;
+  $('duty').textContent = (used * 100).toFixed(1) + '%';
+  $('dutybar').style.width = Math.min(used * 100, 100) + '%';
+  $('dutybar').className = used > 0.9 ? 'bad' : used > 0.7 ? 'warn' : '';
+  renderWindow(s);
+  renderBridge(s);
+  renderDevices(s, canControl, unlocked);
+  renderFind(s, unlocked);
+  $('frames').innerHTML = s.recent_frames.slice(0, 25).map(frameRow).join('');
+  $('modeButton').disabled = !canControl;
+  $('modeButton').textContent = s.mode === 'proxy' ? 'Switch to monitor' : 'Switch to proxy';
+  const readOnly = s.read_only
+    ? 'Read-only: no admin token is set. To set the node up again, press RESET, and then hold BOOT for 5 s.' : '';
+  $('readonly').textContent = readOnly;
+  for (const hint of document.querySelectorAll('[data-locked]')) {
+    hint.hidden = unlocked;
+    hint.textContent = readOnly || 'Enter the admin token under Control to name a valve or to set its proxy.';
+  }
+}
+
+async function refresh() {
+  try {
+    const response = await fetch('/api/status');
+    if (!response.ok) throw new Error(response.status);
+    render(await response.json());
+  } catch (error) {
+    $('mode').textContent = 'no connection';
+    $('mode').className = 'pill stale';
+  }
+}
+
+async function post(path, body) {
+  $('error').textContent = '';
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-Admin-Token': $('token').value},
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) $('error').textContent = await response.text();
+  setTimeout(refresh, 300);
+}
+
+function rename(button) {
+  const name = prompt('Name for this valve (at most 24 bytes, empty clears it)', button.dataset.current);
+  if (name !== null) post('/api/name', {device: button.dataset.rename, name: name.trim()});
+}
+
+$('devices').addEventListener('click', event => {
+  const naming = event.target.closest('button[data-rename]');
+  if (naming) rename(naming);
+});
+$('devices').addEventListener('change', event => {
+  const select = event.target.closest('select[data-device]');
+  if (!select) return;
+  const value = select.value;
+  select.blur();
+  post('/api/proxy', {device: select.dataset.device, enabled: value !== 'off', direction: value === 'off' ? 'both' : value});
+});
+$('windowPicker').addEventListener('click', event => {
+  const button = event.target.closest('button[data-window]');
+  if (!button) return;
+  windowKey = button.dataset.window;
+  if (state) render(state);
+});
+$('rareButton').addEventListener('click', () => {
+  showRare = !showRare;
+  if (state) render(state);
+});
+$('findResults').addEventListener('click', event => {
+  const naming = event.target.closest('button[data-rename]');
+  if (naming) rename(naming);
+});
+$('findButton').addEventListener('click', () => {
+  findStarted = findStarted === null ? Date.now() : null;
+  $('findButton').textContent = findStarted === null ? 'Find valve' : 'Stop';
+  $('findState').textContent = '';
+  $('findTable').hidden = true;
+  if (state) render(state);
+});
+$('modeButton').addEventListener('click', () => {
+  const next = state.mode === 'proxy' ? 'monitor' : 'proxy';
+  if (next === 'proxy' && !confirm('Proxy mode transmits on your heating network. Continue?')) return;
+  post('/api/mode', {mode: next});
+});
+$('surveyButton').addEventListener('click', () => post('/api/survey', {}));
+$('applyButton').addEventListener('click', () => {
+  const best = state.survey.best;
+  post('/api/radio', {channel: best.channel, fsctrl0: best.fsctrl0});
+});
+$('updateFile').addEventListener('change', () => {
+  $('updateState').textContent = '';
+  if (state) render(state);
+});
+$('updateButton').addEventListener('click', install);
+$('token').addEventListener('input', () => { if (state) render(state); });
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

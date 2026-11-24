@@ -1,0 +1,67 @@
+name: Release
+
+# Push a tag such as v0.7.0, equal to the version in the VERSION file. The release
+# then holds the firmware images.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: The tag matches the version
+        run: |
+          version=$(tr -d '[:space:]' < VERSION)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match version $version" >&2
+            exit 1
+          fi
+      - run: python -m pip install platformio==6.1.16
+      - name: Test
+        working-directory: firmware
+        run: pio test -e native
+      - name: Build the firmware
+        working-directory: firmware
+        run: |
+          mkdir -p ../dist
+          pio run -e esp32-s3 -e esp32-s3-octal
+          for variant in esp32-s3 esp32-s3-octal; do
+            name="tado-gado-${variant//-/}-${GITHUB_REF_NAME}"
+            bash scripts/merge_firmware.sh "$variant" "../dist/${name}-factory.bin"
+            cp ".pio/build/$variant/firmware.bin" "../dist/${name}-app.bin"
+          done
+          version="${GITHUB_REF_NAME#v}"
+          python scripts/check_image.py "../dist/tado-gado-esp32s3-${GITHUB_REF_NAME}-factory.bin" dio 8MB esp32s3 "$version"
+          python scripts/check_image.py "../dist/tado-gado-esp32s3octal-${GITHUB_REF_NAME}-factory.bin" dout 32MB esp32s3octal "$version"
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum -- * > SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: dist
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --generate-notes

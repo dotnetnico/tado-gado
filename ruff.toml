@@ -1,0 +1,9 @@
+line-length = 120
+src = ["firmware/scripts"]
+
+[lint]
+select = ["B", "E4", "E7", "E9", "F", "I", "UP"]
+
+[lint.per-file-ignores]
+# PlatformIO injects Import and env into its build scripts.
+"firmware/scripts/*.py" = ["F821"]
