@@ -466,6 +466,17 @@ void LinkMonitor::tick(uint64_t nowUs) {
 }
 
 void LinkMonitor::resetWindows(uint64_t nowUs) {
+  // A pair also leaves proxy mode while the other node is out of reach. A short spell of
+  // monitor like that says too little, so it does not replace a baseline.
+  if (!proxyActive_ && (!hasBaseline_ || dayCoveredUs(nowUs) >= kMinBaselineUs)) {
+    advanceWindows(nowUs);
+    for (DeviceLink& entry : devices_) {
+      entry.baseline = dayTotals(entry);
+    }
+    hasBaseline_ = true;
+    baselineCoveredUs_ = dayCoveredUs(nowUs);
+    baselineTakenUs_ = nowUs;
+  }
   hourClock_.restart();
   dayClock_.restart();
   windowsSinceUs_ = nowUs;
@@ -499,6 +510,20 @@ void LinkMonitor::addTime(DeviceLink* device, uint32_t LinkBucket::* field, uint
     saturatingAdd(device->hour[hourClock_.slot()].*field, airtimeUs);
     saturatingAdd(device->day[dayClock_.slot()].*field, airtimeUs);
   }
+}
+
+uint64_t LinkMonitor::hourCoveredUs(uint64_t nowUs) const {
+  return windowCoveredUs(nowUs, windowsSinceUs_, kHourBucketUs, kHourBuckets);
+}
+
+uint64_t LinkMonitor::dayCoveredUs(uint64_t nowUs) const {
+  return windowCoveredUs(nowUs, windowsSinceUs_, kDayBucketUs, kDayBuckets);
+}
+
+bool LinkMonitor::baseline(uint64_t& coveredUs, uint64_t& takenUs) const {
+  coveredUs = baselineCoveredUs_;
+  takenUs = baselineTakenUs_;
+  return hasBaseline_;
 }
 
 LinkTotals LinkMonitor::hourTotals(const DeviceLink& device) const {

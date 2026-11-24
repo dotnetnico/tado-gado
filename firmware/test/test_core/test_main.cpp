@@ -3,9 +3,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "advice.h"
 #include "dedup.h"
 #include "frames.h"
 #include "image_check.h"
@@ -2081,9 +2083,10 @@ void test_worst_case_status_with_everything_fits_the_firmware_buffer() {
   }
   for (size_t i = 0; i < kMaxDevices; i++) {
     DeviceLink& link = const_cast<DeviceLink&>(monitor.devices()[i]);
-    for (uint32_t* count : {&link.frames, &link.uplinks, &link.uplinksAcked, &link.downlinks, &link.retransmissions,
-                            &link.proxiedUplinks, &link.proxiedDownlinks, &link.deliveryFailures, &link.longTrainAcked,
-                            &link.longTrainUnacked, &link.ackedByPeer, &link.alreadyAnswered}) {
+    for (uint32_t* count :
+         {&link.frames, &link.uplinks, &link.uplinksAcked, &link.downlinks, &link.retransmissions, &link.proxiedUplinks,
+          &link.proxiedDownlinks, &link.deliveryFailures, &link.longTrainAcked, &link.longTrainUnacked,
+          &link.ackedByPeer, &link.alreadyAnswered, &link.handedUplinks, &link.handedDownlinks}) {
       *count = 4000000000;
     }
     link.rssiDbm = -123.45f;
@@ -2259,6 +2262,313 @@ void test_an_unknown_proxy_direction_changes_nothing() {
   TEST_ASSERT_EQUAL_UINT32(1, b.pair.rejected());
 }
 
+// Advice ----------------------------------------------------------------------
+
+// One exchange between the bridge and `device`, with or without its answer.
+void exchange(LinkMonitor& monitor, const uint8_t* device, uint8_t seq, uint64_t atUs, bool uplink, bool acked) {
+  if (uplink) {
+    monitor.onFrame(makeRx(dataFrame(seq, kBridge, device, seq), atUs));
+    if (acked) {
+      monitor.onFrame(makeRx(enhAck(seq, device, kBridge), atUs + 6000));
+    }
+  } else {
+    monitor.onFrame(makeRx(dataFrame(seq, device, kBridge, seq), atUs));
+    if (acked) {
+      monitor.onFrame(makeRx(enhAck(seq, kBridge, device), atUs + 6000));
+    }
+  }
+  monitor.tick(atUs + 30000);
+}
+
+// `count` exchanges spread over `spanUs` from `fromUs`, the first `acked` answered.
+void exchanges(LinkMonitor& monitor, const uint8_t* device, int count, int acked, bool uplink,
+               uint64_t fromUs = 1000000, uint64_t spanUs = 0) {
+  for (int i = 0; i < count; i++) {
+    const uint64_t at = fromUs + (spanUs > 0 ? spanUs * i / count : 100000ULL * i);
+    exchange(monitor, device, static_cast<uint8_t>(i), at, uplink, i < acked);
+  }
+}
+
+std::vector<Advice> adviceOf(const LinkMonitor& monitor, const ProxyEngine* engine = nullptr,
+                             const NameTable* names = nullptr, uint64_t nowUs = 0) {
+  Advice out[kMaxAdvice];
+  const uint64_t now = nowUs > 0 ? nowUs : monitor.windowsSinceUs() + 60 * kMinute;
+  const size_t count = computeAdvice({&monitor, engine, names, now}, out, kMaxAdvice);
+  return std::vector<Advice>(out, out + count);
+}
+
+// A copy, so it outlives the list it came from.
+std::optional<Advice> adviceFor(const std::vector<Advice>& advice, AdviceKind kind) {
+  for (const Advice& a : advice) {
+    if (a.kind == kind) {
+      return a;
+    }
+  }
+  return std::nullopt;
+}
+
+void test_advice_proxies_a_valve_that_misses_the_bridge() {
+  LinkMonitor monitor;
+  monitor.setBridge(kBridge);
+  exchanges(monitor, kFar, 40, 20, false);
+  const std::vector<Advice> advice = adviceOf(monitor);
+  const std::optional<Advice> a = adviceFor(advice, AdviceKind::ProxyToValve);
+  TEST_ASSERT_TRUE(a.has_value());
+  TEST_ASSERT_EQUAL(AdviceLevel::Act, a->level);
+  TEST_ASSERT_EQUAL_MEMORY(kFar, a->device, kPrefixLen);
+  TEST_ASSERT_EQUAL_FLOAT(0.5f, a->value);
+  TEST_ASSERT_EQUAL_UINT32(40, a->total);
+}
+
+void test_advice_waits_for_enough_frames() {
+  LinkMonitor monitor;
+  monitor.setBridge(kBridge);
+  exchanges(monitor, kFar, kAdviceMinFrames - 1, 0, false);
+  TEST_ASSERT_FALSE(adviceFor(adviceOf(monitor), AdviceKind::ProxyToValve).has_value());
+}
+
+void test_advice_watches_a_link_between_80_and_90_percent() {
+  LinkMonitor monitor;
+  monitor.setBridge(kBridge);
+  exchanges(monitor, kFar, 40, 34, false);
+  const std::vector<Advice> advice = adviceOf(monitor);
+  TEST_ASSERT_FALSE(adviceFor(advice, AdviceKind::ProxyToValve).has_value());
+  const std::optional<Advice> a = adviceFor(advice, AdviceKind::WeakLink);
+  TEST_ASSERT_TRUE(a.has_value());
+  TEST_ASSERT_EQUAL(AdviceLevel::Watch, a->level);
+  TEST_ASSERT_EQUAL_FLOAT(0.85f, a->value);
+}
+
+void test_advice_proxies_a_valve_the_bridge_misses() {
+  LinkMonitor monitor;
+  monitor.setBridge(kBridge);
+  exchanges(monitor, kFar, 40, 20, true);
+  const std::optional<Advice> a = adviceFor(adviceOf(monitor), AdviceKind::ProxyToBridge);
+  TEST_ASSERT_TRUE(a.has_value());
+  TEST_ASSERT_EQUAL_FLOAT(0.5f, a->value);
+}
+
+void test_advice_leaves_a_good_valve_alone() {
+  LinkMonitor monitor;
+  monitor.setBridge(kBridge);
+  exchanges(monitor, kFar, 40, 39, false);
+  exchanges(monitor, kFar, 40, 40, true, 10000000);
+  TEST_ASSERT_EQUAL_size_t(0, adviceOf(monitor).size());
+}
+
+void test_advice_skips_a_proxied_valve_and_the_bridge() {
+  LinkMonitor monitor;
+  monitor.setBridge(kBridge);
+  monitor.setProxied(kFar, true);
+  exchanges(monitor, kFar, 40, 0, false);
+  TEST_ASSERT_EQUAL_size_t(0, adviceOf(monitor).size());
+}
+
+// 100 uplinks of kFar and 10 of each of three other valves, in time order over `spanUs`.
+void talkers(LinkMonitor& monitor, uint64_t spanUs) {
+  const uint8_t quiet[3][kPrefixLen] = {{0xA0, 0, 0, 0, 0x10}, {0xA0, 0, 0, 0, 0x11}, {0xA0, 0, 0, 0, 0x12}};
+  for (int i = 0; i < 100; i++) {
+    const uint64_t at = 1000000 + spanUs * i / 100;
+    exchange(monitor, kFar, static_cast<uint8_t>(i), at, true, true);
+    for (int d = 0; i % 10 == 0 && d < 3; d++) {
+      exchange(monitor, quiet[d], static_cast<uint8_t>(i / 10), at + 100000ULL * (d + 1), true, true);
+    }
+  }
+}
+
+void test_advice_finds_a_valve_that_keeps_talking() {
+  LinkMonitor monitor;
+  monitor.setBridge(kBridge);
+  talkers(monitor, 60 * kMinute);
+  const std::optional<Advice> a = adviceFor(adviceOf(monitor, nullptr, nullptr, 61 * kMinute), AdviceKind::Chatty);
+  TEST_ASSERT_TRUE(a.has_value());
+  TEST_ASSERT_EQUAL_MEMORY(kFar, a->device, kPrefixLen);
+  TEST_ASSERT_FLOAT_WITHIN(1.0f, 98.4f, a->value);
+  TEST_ASSERT_FLOAT_WITHIN(0.5f, 9.8f, a->extra);
+}
+
+void test_advice_needs_a_quarter_of_an_hour_for_rates_per_hour() {
+  LinkMonitor monitor;
+  monitor.setBridge(kBridge);
+  talkers(monitor, 10 * kMinute);
+  TEST_ASSERT_FALSE(adviceFor(adviceOf(monitor, nullptr, nullptr, 11 * kMinute), AdviceKind::Chatty).has_value());
+}
+
+void test_advice_counts_valves_without_a_name() {
+  LinkMonitor monitor;
+  NameTable names;
+  monitor.setBridge(kBridge);
+  exchanges(monitor, kFar, 12, 12, true);
+  exchanges(monitor, kOther, 12, 12, true, 10000000);
+  const uint8_t rare[kPrefixLen] = {0xA0, 0, 0, 0, 0x20};
+  exchanges(monitor, rare, 3, 3, true, 20000000);
+  TEST_ASSERT_TRUE(names.set(kOther, "Study"));
+  const std::optional<Advice> a = adviceFor(adviceOf(monitor, nullptr, &names), AdviceKind::Unnamed);
+  TEST_ASSERT_TRUE(a.has_value());
+  TEST_ASSERT_EQUAL_UINT32(1, a->count);
+}
+
+void test_advice_sees_a_busy_bridge() {
+  LinkMonitor monitor;
+  monitor.setBridge(kBridge);
+  exchanges(monitor, kFar, 5, 5, false);
+  exchanges(monitor, kOther, 5, 5, false, 10000000);
+  DeviceLink& bridge = *monitor.mutableLink(kBridge);
+  bridge.day[0].airtimeUs = 20000000;  // 20 s in half an hour: 1.1%.
+  monitor.mutableLink(kOther)->day[0].trainUs = 9000000;
+  const std::optional<Advice> a = adviceFor(adviceOf(monitor, nullptr, nullptr, 30 * kMinute), AdviceKind::BridgeBusy);
+  TEST_ASSERT_TRUE(a.has_value());
+  TEST_ASSERT_EQUAL(AdviceLevel::Info, a->level);
+  TEST_ASSERT_EQUAL_MEMORY(kOther, a->device, kPrefixLen);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 20.0f / 1800.0f, a->value);
+}
+
+void test_advice_warns_before_the_duty_budget_runs_out() {
+  FakePort port;
+  LinkMonitor monitor;
+  ProxyEngine engine(port, monitor);
+  monitor.setBridge(kBridge);
+  exchanges(monitor, kFar, 5, 5, false);
+  monitor.mutableLink(kFar)->airtime.record(20000000, port.clock);
+  engine.duty().record(DutyCycleLimiter::kBudgetUs * 3 / 4, port.clock);
+  const std::optional<Advice> a = adviceFor(adviceOf(monitor, &engine, nullptr, port.clock), AdviceKind::DutyHigh);
+  TEST_ASSERT_TRUE(a.has_value());
+  TEST_ASSERT_EQUAL(AdviceLevel::Watch, a->level);
+  TEST_ASSERT_EQUAL_MEMORY(kFar, a->device, kPrefixLen);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 20.0f, a->extra);
+  engine.duty().record(DutyCycleLimiter::kBudgetUs / 5, port.clock);
+  TEST_ASSERT_EQUAL(AdviceLevel::Act,
+                    adviceFor(adviceOf(monitor, &engine, nullptr, port.clock), AdviceKind::DutyHigh)->level);
+}
+
+// A valve node in proxy mode for kFar, which it hears at `deviceRssi`, and the bridge
+// node's answers at -80 dBm.
+void startValveNode(LinkMonitor& monitor, ProxyEngine& engine, FakePort& port, float deviceRssi) {
+  monitor.setBridge(kBridge);
+  monitor.setProxied(kFar, true, ProxyDirection::ToValve);
+  engine.setRole(Role::Valve);
+  engine.setProxyMode(true);
+  exchange(monitor, kFar, 200, port.clock, true, false);
+  monitor.mutableLink(kFar)->rssiDbm = deviceRssi;
+  RxFrame peerAnswer = makeRx(enhAck(201, kBridge, kFar), port.clock + 100000);
+  peerAnswer.rssiDbm = -80.0f;
+  engine.onFrame(peerAnswer);
+}
+
+void test_frames_from_the_other_node_count_per_device() {
+  FakePort port;
+  LinkMonitor monitor;
+  ProxyEngine engine(port, monitor);
+  startValveNode(monitor, engine, port, -60.0f);
+  engine.onPeerFrame(false, dataFrame(7, kFar, kBridge).data(), dataFrame(7, kFar, kBridge).size(), port.clock);
+  engine.onPeerFrame(false, dataFrame(7, kFar, kBridge).data(), dataFrame(7, kFar, kBridge).size(), port.clock);
+  TEST_ASSERT_EQUAL_UINT32(1, monitor.findLink(kFar)->handedDownlinks);  // The repeat is the same job.
+  TEST_ASSERT_EQUAL_UINT32(0, monitor.findLink(kFar)->proxiedDownlinks);
+}
+
+void test_advice_turns_off_a_proxy_the_valve_does_not_need() {
+  FakePort port;
+  LinkMonitor monitor;
+  ProxyEngine engine(port, monitor);
+  startValveNode(monitor, engine, port, -60.0f);
+  TEST_ASSERT_TRUE(engine.canTellOwnAnswer(kFar));
+  DeviceLink& link = *monitor.mutableLink(kFar);
+  link.handedDownlinks = 40;
+  link.alreadyAnswered = 11;
+  TEST_ASSERT_FALSE(adviceFor(adviceOf(monitor, &engine), AdviceKind::ProxyUnneeded).has_value());  // 27.5%
+  link.alreadyAnswered = 12;
+  link.deliveryFailures = 3;
+  const std::optional<Advice> a = adviceFor(adviceOf(monitor, &engine), AdviceKind::ProxyUnneeded);
+  TEST_ASSERT_TRUE(a.has_value());
+  TEST_ASSERT_EQUAL(AdviceLevel::Act, a->level);
+  TEST_ASSERT_EQUAL_UINT32(12, a->count);
+  TEST_ASSERT_EQUAL_UINT32(40, a->total);
+  TEST_ASSERT_EQUAL_UINT32(3, a->other);
+}
+
+void test_advice_says_when_it_cannot_judge_a_proxied_valve() {
+  FakePort port;
+  LinkMonitor monitor;
+  ProxyEngine engine(port, monitor);
+  monitor.setBridge(kBridge);
+  exchanges(monitor, kFar, 40, 30, false);  // In monitor mode, before the proxy.
+  startValveNode(monitor, engine, port, -76.0f);
+  TEST_ASSERT_FALSE(engine.canTellOwnAnswer(kFar));
+  const std::vector<Advice> advice = adviceOf(monitor, &engine);
+  TEST_ASSERT_FALSE(adviceFor(advice, AdviceKind::ProxyUnneeded).has_value());
+  const std::optional<Advice> a = adviceFor(advice, AdviceKind::CannotJudge);
+  TEST_ASSERT_TRUE(a.has_value());
+  TEST_ASSERT_EQUAL(AdviceLevel::Info, a->level);
+  TEST_ASSERT_EQUAL_FLOAT(0.75f, a->value);
+  TEST_ASSERT_EQUAL_UINT32(40, a->total);
+}
+
+void test_monitor_keeps_a_baseline_when_the_proxy_starts() {
+  FakePort port;
+  LinkMonitor monitor;
+  ProxyEngine engine(port, monitor);
+  monitor.setBridge(kBridge);
+  uint64_t covered = 0;
+  uint64_t taken = 0;
+  TEST_ASSERT_FALSE(monitor.baseline(covered, taken));
+  exchanges(monitor, kFar, 4, 3, false);
+  port.clock = 20 * kMinute;
+  engine.setProxyMode(true);
+  TEST_ASSERT_TRUE(monitor.baseline(covered, taken));
+  TEST_ASSERT_EQUAL_UINT64(20 * kMinute, covered);
+  TEST_ASSERT_EQUAL_UINT64(20 * kMinute, taken);
+  const DeviceLink* far = monitor.findLink(kFar);
+  TEST_ASSERT_EQUAL_UINT32(3, far->baseline.downlinksAcked);
+  TEST_ASSERT_EQUAL_UINT32(1, far->baseline.downlinksUnacked);
+  TEST_ASSERT_EQUAL_UINT32(0, monitor.dayTotals(*far).downlinks);
+  port.clock += kMinute;
+  engine.setProxyMode(false);  // Back to monitor: the proxy's window is no baseline.
+  TEST_ASSERT_TRUE(monitor.baseline(covered, taken));
+  TEST_ASSERT_EQUAL_UINT64(20 * kMinute, taken);
+  TEST_ASSERT_EQUAL_UINT32(3, far->baseline.downlinksAcked);
+  port.clock += kMinute;
+  engine.setProxyMode(true);  // A minute without the other node is too short to replace it.
+  TEST_ASSERT_TRUE(monitor.baseline(covered, taken));
+  TEST_ASSERT_EQUAL_UINT64(20 * kMinute, taken);
+  TEST_ASSERT_EQUAL_UINT32(3, far->baseline.downlinksAcked);
+  port.clock += kMinute;
+  engine.setProxyMode(false);
+  port.clock += 16 * kMinute;
+  engine.setProxyMode(true);  // A quarter of an hour of monitor does.
+  TEST_ASSERT_TRUE(monitor.baseline(covered, taken));
+  TEST_ASSERT_EQUAL_UINT64(port.clock, taken);
+  TEST_ASSERT_EQUAL_UINT32(0, far->baseline.downlinksAcked);
+}
+
+void test_advice_puts_the_most_urgent_first_and_drops_the_least() {
+  LinkMonitor monitor;
+  NameTable names;
+  monitor.setBridge(kBridge);
+  exchanges(monitor, kFar, 40, 34, false);              // Watch
+  exchanges(monitor, kOther, 40, 10, false, 20000000);  // Act
+  const std::vector<Advice> advice = adviceOf(monitor, nullptr, &names);
+  TEST_ASSERT_EQUAL_size_t(3, advice.size());
+  TEST_ASSERT_EQUAL(AdviceKind::ProxyToValve, advice[0].kind);
+  TEST_ASSERT_EQUAL(AdviceKind::WeakLink, advice[1].kind);
+  TEST_ASSERT_EQUAL(AdviceKind::Unnamed, advice[2].kind);
+  Advice one[1];
+  TEST_ASSERT_EQUAL_size_t(1, computeAdvice({&monitor, nullptr, &names, 60 * kMinute}, one, 1));
+  TEST_ASSERT_EQUAL(AdviceKind::ProxyToValve, one[0].kind);
+}
+
+void test_status_lists_the_advice_and_the_baseline() {
+  static char buffer[kStatusJsonCapacity];
+  LinkMonitor monitor;
+  monitor.setBridge(kBridge);
+  exchanges(monitor, kFar, 40, 20, false);
+  const std::string json = statusOf(monitor, nullptr, buffer, sizeof(buffer));
+  for (const char* key : {"\"advice\":[{\"kind\":\"proxy_to_valve\",\"level\":\"act\",\"device\":\"a000000002\","
+                          "\"rate\":0.500,\"frames\":40,",
+                          "\"baseline\":null", "\"handed_uplinks\":0", "\"handed_downlinks\":0"}) {
+    TEST_ASSERT_NOT_NULL_MESSAGE(std::strstr(json.c_str(), key), key);
+  }
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_builders_match_the_python_vectors);
@@ -2386,5 +2696,22 @@ int main() {
   RUN_TEST(test_a_bad_name_from_the_other_node_is_refused);
   RUN_TEST(test_proxy_direction_travels_to_the_partner);
   RUN_TEST(test_an_unknown_proxy_direction_changes_nothing);
+  RUN_TEST(test_advice_proxies_a_valve_that_misses_the_bridge);
+  RUN_TEST(test_advice_waits_for_enough_frames);
+  RUN_TEST(test_advice_watches_a_link_between_80_and_90_percent);
+  RUN_TEST(test_advice_proxies_a_valve_the_bridge_misses);
+  RUN_TEST(test_advice_leaves_a_good_valve_alone);
+  RUN_TEST(test_advice_skips_a_proxied_valve_and_the_bridge);
+  RUN_TEST(test_advice_finds_a_valve_that_keeps_talking);
+  RUN_TEST(test_advice_needs_a_quarter_of_an_hour_for_rates_per_hour);
+  RUN_TEST(test_advice_counts_valves_without_a_name);
+  RUN_TEST(test_advice_sees_a_busy_bridge);
+  RUN_TEST(test_advice_warns_before_the_duty_budget_runs_out);
+  RUN_TEST(test_frames_from_the_other_node_count_per_device);
+  RUN_TEST(test_advice_turns_off_a_proxy_the_valve_does_not_need);
+  RUN_TEST(test_advice_says_when_it_cannot_judge_a_proxied_valve);
+  RUN_TEST(test_monitor_keeps_a_baseline_when_the_proxy_starts);
+  RUN_TEST(test_advice_puts_the_most_urgent_first_and_drops_the_least);
+  RUN_TEST(test_status_lists_the_advice_and_the_baseline);
   return UNITY_END();
 }

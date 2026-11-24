@@ -71,6 +71,15 @@ inline void accumulate(LinkTotals& total, const LinkBucket& bucket) {
   total.trainUs += bucket.trainUs;
 }
 
+// The time a window covers: from the start of its oldest bucket, or from `sinceUs` if
+// that is later.
+inline uint64_t windowCoveredUs(uint64_t nowUs, uint64_t sinceUs, uint64_t bucketUs, size_t buckets) {
+  const uint64_t index = nowUs / bucketUs;
+  const uint64_t start = index >= buckets - 1 ? (index - (buckets - 1)) * bucketUs : 0;
+  const uint64_t from = start > sinceUs ? start : sinceUs;
+  return nowUs > from ? nowUs - from : 0;
+}
+
 // Which bucket of a ring is current. The owner clears the slots this hands back.
 template <uint64_t BucketUs, size_t Buckets>
 class BucketClock {
