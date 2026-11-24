@@ -1,0 +1,109 @@
+// Renovate keeps the dependencies up to date, in strictly separate groups.
+//
+// CI tooling merges by itself once the owner approved the pull request and all checks
+// passed. The firmware platform and libraries never do: a new ESP32 core can change the
+// radio timing or the Wi-Fi in ways the tests do not catch, so those are tried on the
+// boards first, and they need a release.
+{
+  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+  extends: ['config:recommended', ':dependencyDashboard', ':semanticCommitsDisabled'],
+  timezone: 'Europe/Amsterdam',
+  schedule: ['* 0-6 * * 1'],
+  // A release that was pulled or hijacked is usually found within days.
+  minimumReleaseAge: '3 days',
+  internalChecksFilter: 'strict',
+  prConcurrentLimit: 5,
+  labels: ['dependencies'],
+  automerge: false,
+  platformAutomerge: true,
+  'pre-commit': {
+    enabled: true,
+  },
+  vulnerabilityAlerts: {
+    schedule: ['at any time'],
+    minimumReleaseAge: null,
+    labels: ['dependencies', 'security'],
+  },
+  customManagers: [
+    {
+      description: 'Python tools pinned in the workflows, such as PlatformIO',
+      customType: 'regex',
+      managerFilePatterns: ['/^\\.github/workflows/[^/]+\\.ya?ml$/'],
+      matchStrings: ['pip install (?<depName>[A-Za-z0-9_.-]+)==(?<currentValue>[^\\s]+)'],
+      datasourceTemplate: 'pypi',
+    },
+    {
+      description: 'The PlatformIO platform for the ESP32',
+      customType: 'regex',
+      managerFilePatterns: ['/^firmware/platformio\\.ini$/'],
+      matchStrings: ['platform\\s*=\\s*espressif32@(?<currentValue>\\d+\\.\\d+\\.\\d+)'],
+      depNameTemplate: 'platformio/platform-espressif32',
+      datasourceTemplate: 'github-releases',
+      extractVersionTemplate: '^v?(?<version>.+)$',
+    },
+    {
+      description: 'Firmware libraries from GitHub, written as owner/name@version',
+      customType: 'regex',
+      managerFilePatterns: ['/^firmware/platformio\\.ini$/'],
+      matchStrings: ['(?<depName>tzapu/WiFiManager)@(?<currentValue>\\d+\\.\\d+\\.\\d+)'],
+      datasourceTemplate: 'github-releases',
+      extractVersionTemplate: '^v?(?<version>.+)$',
+    },
+  ],
+  packageRules: [
+    {
+      description: 'GitHub Actions, pinned by commit',
+      matchManagers: ['github-actions'],
+      groupName: 'GitHub Actions',
+      groupSlug: 'github-actions',
+    },
+    {
+      description: 'Formatters and linters of pre-commit',
+      matchManagers: ['pre-commit'],
+      groupName: 'pre-commit hooks',
+      groupSlug: 'pre-commit',
+    },
+    {
+      description: 'Python tools in CI',
+      matchManagers: ['custom.regex'],
+      matchDatasources: ['pypi'],
+      groupName: 'CI Python tools',
+      groupSlug: 'ci-python',
+    },
+    {
+      description: 'CI tooling merges by itself after approval, except majors',
+      matchManagers: ['github-actions', 'pre-commit'],
+      matchUpdateTypes: ['minor', 'patch', 'digest', 'pinDigest'],
+      automerge: true,
+    },
+    {
+      description: 'CI Python tools merge by itself after approval, except majors',
+      matchManagers: ['custom.regex'],
+      matchDatasources: ['pypi'],
+      matchUpdateTypes: ['minor', 'patch'],
+      automerge: true,
+    },
+    {
+      description: 'The ESP32 platform: tried on the boards, never merged by itself',
+      matchDepNames: ['platformio/platform-espressif32'],
+      groupName: 'ESP32 platform',
+      groupSlug: 'firmware-platform',
+      labels: ['dependencies', 'firmware'],
+      automerge: false,
+    },
+    {
+      description: 'Firmware libraries: tried on the boards, never merged by itself',
+      matchDepNames: ['tzapu/WiFiManager'],
+      groupName: 'Firmware libraries',
+      groupSlug: 'firmware-libs',
+      labels: ['dependencies', 'firmware'],
+      automerge: false,
+    },
+    {
+      description: 'A major update gets a pull request of its own, and is never merged by itself',
+      matchUpdateTypes: ['major'],
+      groupName: null,
+      automerge: false,
+    },
+  ],
+}
