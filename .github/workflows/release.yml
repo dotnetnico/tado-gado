@@ -1,7 +1,8 @@
 name: Release
 
-# Push a tag such as v0.7.0, equal to the version in the VERSION file. The release
-# then holds the firmware images.
+# Push a tag such as v1.2.3, equal to the version in the VERSION file. The release
+# then holds the firmware images. A tag is refused when nothing in firmware/ changed since
+# the last release.
 on:
   push:
     tags: ["v*"]
@@ -16,6 +17,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
@@ -24,6 +26,13 @@ jobs:
           version=$(tr -d '[:space:]' < VERSION)
           if [ "v$version" != "$GITHUB_REF_NAME" ]; then
             echo "Tag $GITHUB_REF_NAME does not match version $version" >&2
+            exit 1
+          fi
+      - name: The firmware changed since the last release
+        run: |
+          previous=$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null || true)
+          if [ -n "$previous" ] && git diff --quiet "$previous" HEAD -- firmware/; then
+            echo "Nothing in firmware/ changed since $previous, so no release is needed." >&2
             exit 1
           fi
       - run: python -m pip install platformio==6.1.16

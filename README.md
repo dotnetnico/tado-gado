@@ -13,6 +13,7 @@ Tado-gado runs on a small ESP32 with a CC1101 radio. It measures those radio lin
 | ESP32 firmware, monitor | Runs on hardware |
 | ESP32 firmware, proxy (one node) | Passes the protocol simulation. Not yet run on hardware |
 | ESP32 firmware, two nodes | Runs on hardware, and passes the protocol simulation |
+
 [docs/how-it-works.md](docs/how-it-works.md) explains why a plain repeater cannot work on this network, and how the proxy gets around that.
 
 **The device always starts in monitor mode, where it transmits nothing.** Proxy mode is switched on from the dashboard with your admin token, and is not remembered: a restart or power cut returns to monitor, so pulling the plug is a reliable off switch. After a power cut you have to switch proxy mode on again. The list of valves you named is remembered.
@@ -46,10 +47,10 @@ No toolchain is needed. Download the factory image for your board from the [rele
 
 ```bash
 pip install esptool
-esptool.py --chip esp32s3 write_flash 0x0 tado-gado-esp32s3octal-v0.11.0-factory.bin
+esptool.py --chip esp32s3 write_flash 0x0 tado-gado-esp32s3octal-<version>-factory.bin
 ```
 
-That example is for an octal flash board such as the N32R16V. The images from v0.5.0 and earlier are for quad flash only. Each release has a `SHA256SUMS` file to check the download against.
+Replace `<version>` with the release, such as `v1.2.3`. That example is for an octal flash board such as the N32R16V. Each release has a `SHA256SUMS` file to check the download against.
 
 If esptool finds no serial port on Windows, the driver for the CP2102N chip behind the UART port is probably missing. The other port, marked USB, needs no driver: hold BOOT, press RESET, let go of BOOT, and flash through that port. Press RESET once more when it is done.
 
@@ -57,7 +58,7 @@ The factory image also erases the Wi-Fi details, the token and the names.
 
 ### Updating
 
-From v0.8.0 on, a node is updated from its own dashboard, without a cable:
+A node is updated from its own dashboard, without a cable:
 
 1. Download the `-app.bin` file for your board from the [releases](../../releases). The **Firmware** panel names it.
 2. Switch to monitor, and enter the admin token.
@@ -135,7 +136,7 @@ Choosing roles is automatic, but transmitting is not: a pair never starts by its
 - If either node restarts, both go back to monitor, so pulling a plug still stops everything.
 - Frames travel between the nodes over UDP on your network, signed with a key derived from the admin token. A frame lost on the network is gone, and the sender got an ACK for it, so wired Ethernet or strong Wi-Fi matters. Some routers block traffic between clients, and then the nodes will not find each other.
 - Each node tells the other how much duty-cycle budget and queue space it has left, so neither answers a frame the other cannot deliver.
-- Both nodes must run the same version: v0.7.0 and v0.9.0 changed the messages between them, v0.10.0 added a proxy direction that an earlier node reads as both ways, and v0.12.0 changed the key that signs them. A node rejects messages from an earlier start of the other node, so after erasing the flash of one node with esptool, restart the other one too.
+- Both nodes must run the same version, because a new version may change the messages between them or the key that signs them. Update them one right after the other. A node rejects messages from an earlier start of the other node, so after erasing the flash of one node with esptool, restart the other one too.
 
 Keep walls or a floor between the nodes. They share the channel with the bridge and the valves, so two nodes in one room only get in each other's way.
 
@@ -183,7 +184,9 @@ pio run -e esp32-s3 -t upload
 
 ## Releases
 
-Pushing a tag such as `v0.7.0`, equal to the version in `VERSION`, runs all tests and creates a GitHub release with the firmware images.
+Pushing a tag such as `v1.2.3`, equal to the version in `VERSION`, runs all tests and creates a GitHub release with the firmware images.
+
+A release is only for a change to the firmware. A pull request that changes only documentation (Markdown files, `docs/` and `LICENSE`) needs no new version: CI then skips the firmware tests and build, and the release workflow refuses a tag when nothing in `firmware/` changed since the last release.
 
 ## Credits
 

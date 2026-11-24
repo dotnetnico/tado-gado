@@ -11,6 +11,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # A change to documentation only skips the firmware jobs. A skipped job counts as
+  # passed for the required checks, so such a pull request can still be merged.
+  changes:
+    name: Changes
+    runs-on: ubuntu-24.04
+    outputs:
+      firmware: ${{ steps.check.outputs.firmware }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: check
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          # On main, what this push added. On a branch, all it adds to main.
+          if [ "$GITHUB_REF" = refs/heads/main ]; then
+            base="$BEFORE"
+          else
+            base=$(git merge-base origin/main HEAD || true)
+          fi
+          firmware=$(bash .github/scripts/firmware_changed.sh "$base")
+          echo "Firmware changed: $firmware"
+          echo "firmware=$firmware" >> "$GITHUB_OUTPUT"
+
   lint:
     name: Lint
     runs-on: ubuntu-24.04
@@ -32,6 +58,8 @@ jobs:
 
   firmware-tests:
     name: Firmware tests
+    needs: changes
+    if: needs.changes.outputs.firmware == 'true'
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -49,6 +77,8 @@ jobs:
 
   firmware-build:
     name: Firmware build
+    needs: changes
+    if: needs.changes.outputs.firmware == 'true'
     runs-on: ubuntu-24.04
     defaults:
       run:

@@ -42,7 +42,7 @@ The pair also measures better than one node. Each node counts a frame as answere
 
 Two kinds of repeat get different answers:
 
-- An **echo** has exactly the bytes of a frame this node already handled: its own transmission, or one from the other node of a pair. It gets no reaction, which prevents loops. A node remembers the frames it handed to the other node for five minutes, because that node may send one much later. An ACK to such a frame would tell the other node that it arrived at the valve or the bridge. Version 0.7.2 and earlier remembered them for three seconds, and gave such ACKs.
+- An **echo** has exactly the bytes of a frame this node already handled: its own transmission, or one from the other node of a pair. It gets no reaction, which prevents loops. A node remembers the frames it handed to the other node for five minutes, because that node may send one much later. An ACK to such a frame would tell the other node that it arrived at the valve or the bridge.
 - A **retransmission** is a sender trying again because it missed an ACK. It gets a new ACK, but the frame is not delivered twice.
 
 A retry can be recognised without the key. It reuses the CCM nonce, so its ciphertext differs only at the frame counter, the checksum and the tag. The firmware compares the rest.
