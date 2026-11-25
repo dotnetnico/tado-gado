@@ -2,7 +2,7 @@
 
 ## Why this is not a simple repeater
 
-Version 0.1 of the Python relay this project started from retransmitted frames as they came in. That cannot work on this network, whatever the radio parameters:
+A repeater that sends each frame on as it comes in cannot work on this network, whatever the radio parameters:
 
 | Protocol fact | Consequence |
 |---|---|
@@ -49,16 +49,16 @@ A retry can be recognised without the key. It reuses the CCM nonce, so its ciphe
 
 ## Radio parameters
 
-These come from [freedo](https://github.com/CappyT/freedo), a local coordinator that drives real V3+ devices, and differ from what version 0.1 of that Python relay published:
+These come from [freedo](https://github.com/CappyT/freedo), a local coordinator that drives real V3+ devices:
 
-| Parameter | Python relay 0.1 | Actual |
-|---|---|---|
-| Carrier | 868.300 MHz | 863.125 MHz + channel x 199.951 kHz, usually channel 26 (868.324 MHz) |
-| Data rate | 38.4 kBaud | 49.99 kBaud |
-| Deviation | 20 kHz | 25.39 kHz |
-| Sync word | `0x91D3` | `0xD391`, the chip default |
-| Hardware CRC | Off | On |
-| MAC | Plain 802.15.4 | 802.15.4-2015 profile with CSL, 1 s sample period |
+| Parameter | Value |
+|---|---|
+| Carrier | 863.125 MHz + channel x 199.951 kHz, usually channel 26 (868.324 MHz) |
+| Data rate | 49.99 kBaud |
+| Deviation | 25.39 kHz |
+| Sync word | `0xD391`, the chip default |
+| Hardware CRC | On |
+| MAC | 802.15.4-2015 profile with CSL, 1 s sample period |
 
 The register values are in [phy.h](../firmware/lib/tado_gado_core/src/phy.h), and a test recomputes these numbers from them.
 
