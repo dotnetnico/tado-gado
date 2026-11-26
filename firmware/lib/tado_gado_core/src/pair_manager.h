@@ -64,10 +64,15 @@ class PairManager : public PeerSink {
   void tick(uint64_t nowUs);
   void onDatagram(const uint8_t* data, size_t length, uint64_t nowUs);
 
-  // Switch proxy on or off. Returns false if a peer is there but the roles are not
-  // decided, because neither node hears the bridge yet. The engine follows on the next
-  // tick, so this is safe from another task while a transmission is under way.
+  // Switch proxy on or off. Returns false if the node may not send, or if a peer is
+  // there but the roles are not decided, because neither node hears the bridge yet. The
+  // engine follows on the next tick, so this is safe from another task while a
+  // transmission is under way.
   bool requestProxy(bool enabled, uint64_t nowUs);
+  // False while the radio is tuned outside the band the proxy may send in (see band.h).
+  // The node then refuses to start, and stops both nodes if it was proxying.
+  void setTransmitAllowed(bool allowed, uint64_t nowUs);
+  bool transmitAllowed() const { return transmitAllowed_; }
   // Send the list of proxied devices to the peer.
   void syncProxied();
   // True once after the peer replaced the list, so it can be saved.
@@ -140,6 +145,7 @@ class PairManager : public PeerSink {
   uint8_t bridgeNode_[kNodeIdLen] = {};
   Role role_ = Role::Single;
 
+  bool transmitAllowed_ = true;
   bool wanted_ = false;
   bool startPending_ = false;
   uint64_t startDeadlineUs_ = 0;

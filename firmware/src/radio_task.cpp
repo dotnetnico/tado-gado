@@ -9,6 +9,7 @@
 #include <cstring>
 #include <new>
 
+#include "band.h"
 #include "board.h"
 #include "build_info.h"
 #include "cc1101.h"
@@ -208,6 +209,7 @@ void serviceRequests(uint64_t nowUs) {
     survey.stop();
     chip.retune(radioStatus.channel, radioStatus.fsctrl0);
     assembler.reset();
+    pair.setTransmitAllowed(tadogado::transmitAllowed(radioStatus.channel, radioStatus.fsctrl0), nowUs);
   }
   if (powerRequested.exchange(false)) {
     outputPower = requestedPower.load();
@@ -299,6 +301,7 @@ void start(const Config& config) {
   radioStatus.channel = config.channel;
   radioStatus.fsctrl0 = config.fsctrl0;
   outputPower = config.pa;
+  pair.setTransmitAllowed(tadogado::transmitAllowed(config.channel, config.fsctrl0), startedUs);
   for (size_t i = 0; i < config.proxiedCount; i++) {
     // The flash contents are not trusted: an unknown direction serves both ways.
     const uint8_t direction =
@@ -403,6 +406,13 @@ bool requestProxyMode(bool enabled) {
 }
 
 bool proxyMode() { return modeProxy.load(); }
+
+bool transmitAllowed() {
+  xSemaphoreTake(lock, portMAX_DELAY);
+  const bool allowed = pair.transmitAllowed();
+  xSemaphoreGive(lock);
+  return allowed;
+}
 
 bool requestSurvey() {
   if (proxyMode()) {

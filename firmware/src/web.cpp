@@ -7,6 +7,7 @@
 
 #include <cstring>
 
+#include "band.h"
 #include "generated/dashboard_html.h"
 #include "link_monitor.h"
 #include "radio_task.h"
@@ -185,6 +186,11 @@ esp_err_t handleSetRadio(httpd_req_t* request, const char* json) {
   if (hasChannel && (channel < 0 || channel > kMaxChannel || fsctrl0 < -128 || fsctrl0 > 127)) {
     return replyText(request, "400 Bad Request", "need channel 0-34 and fsctrl0 -128 to 127");
   }
+  if (hasChannel && radio::proxyMode() &&
+      !tadogado::transmitAllowed(static_cast<uint8_t>(channel), static_cast<int8_t>(fsctrl0))) {
+    return replyText(request, "409 Conflict",
+                     "the proxy sends only in 868.0-868.6 MHz: switch to monitor mode before tuning outside it");
+  }
   // Output power, as a PATABLE value. Lower it for an antenna with gain.
   int pa = 0;
   const bool hasPower = tadogado::jsonIntField(json, "pa", pa);
@@ -224,6 +230,10 @@ esp_err_t handleSetMode(httpd_req_t* request, const char* json) {
   }
   if (update::restarting()) {
     return replyText(request, "409 Conflict", "the node is about to restart");
+  }
+  if (strcmp(mode, "proxy") == 0 && !radio::transmitAllowed()) {
+    return replyText(request, "409 Conflict",
+                     "the radio is tuned outside 868.0-868.6 MHz, where the proxy may not send: pick channel 25-27");
   }
   if (!radio::requestProxyMode(strcmp(mode, "proxy") == 0)) {
     return replyText(request, "409 Conflict",

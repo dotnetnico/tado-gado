@@ -164,6 +164,7 @@ Keep walls or a floor between the nodes. They share the channel with the bridge 
 
 ## Limits of the proxy
 
+- **Band:** the proxy sends only in 868.0-868.6 MHz, where the 1% below applies. That is channel 25 to 27; the CC1101 tunes from 863 to 870 MHz, but most of that allows 0.1% or less. On another channel, or with a trim that puts a frame over an edge, the node refuses proxy mode, and it stops both nodes when the radio is tuned out of the band. **Pair & radio → Radio** shows the carrier, and the status gives `carrier_khz` and `transmit_allowed` under `radio`.
 - **Duty cycle:** the band allows 1%. The firmware stops at 0.9% (32.4 s per rolling hour). When that runs out it stops answering, and the valves fall back to their own retries. About 300 proxied commands per hour fill the budget of one node, so it suits a few weak valves, not a whole house. In a pair the valve node spends most of it, and the bridge node answers from its own budget.
 - **Where the budget goes:** **Airtime, last hour** under **Devices** shows what this node sent for each valve, and the share of its budget. A valve that takes a lot and reaches the bridge by itself is better left off the proxy.
 - **Deaf while sending:** the node hears nothing during its own wake-up train, which takes up to 1 s. Senders retry by themselves.
