@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "advice.h"
+#include "band.h"
 #include "dedup.h"
 #include "frames.h"
 #include "image_check.h"
@@ -225,6 +226,21 @@ uint8_t phyRegister(uint8_t address) {
   }
   TEST_FAIL_MESSAGE("register missing");
   return 0;
+}
+
+void test_proxy_sends_only_in_the_868_0_to_868_6_band() {
+  TEST_ASSERT_INT64_WITHIN(1000, 868324000, carrierHz(26, 0));
+  TEST_ASSERT_INT64_WITHIN(1000, 863125000, carrierHz(0, 0));
+  TEST_ASSERT_INT64_WITHIN(5, 15869, carrierHz(26, 10) - carrierHz(26, 0));
+  for (int channel = 0; channel <= 34; channel++) {
+    const bool inBand = channel >= 25 && channel <= 27;
+    TEST_ASSERT_EQUAL_MESSAGE(inBand, transmitAllowed(static_cast<uint8_t>(channel), 0), "channel");
+  }
+  // A large trim moves the frame over an edge.
+  TEST_ASSERT_TRUE(transmitAllowed(27, 0));
+  TEST_ASSERT_FALSE(transmitAllowed(27, 20));
+  TEST_ASSERT_TRUE(transmitAllowed(25, -30));
+  TEST_ASSERT_FALSE(transmitAllowed(25, -60));
 }
 
 // The derived PHY values of freedo's PROTOCOL.md, from the registers and a 26 MHz crystal.
@@ -597,7 +613,9 @@ void test_status_has_every_field_the_dashboard_reads() {
   monitor.onFrame(makeRx(dataFrame(1, kBridge, kFar), 1000000));
   monitor.onFrame(makeRx(enhAck(1, kFar, kBridge), 1006000));
   const std::string json = statusOf(monitor, nullptr, buffer, sizeof(buffer));
-  for (const char* key : {"\"mode\":\"monitor\"",
+  for (const char* key : {"\"transmit_allowed\":true",
+                          "\"carrier_khz\":868303",
+                          "\"mode\":\"monitor\"",
                           "\"role\"",
                           "\"uptime_seconds\":5",
                           "\"read_only\":true",
@@ -1463,6 +1481,48 @@ void test_one_request_stops_both_nodes() {
   TEST_ASSERT_FALSE(a.engine.proxyMode());
   TEST_ASSERT_FALSE(b.engine.proxyMode());
   TEST_ASSERT_FALSE(a.pair.wanted());
+}
+
+void test_a_node_outside_the_band_cannot_start_the_proxy() {
+  Node a(1, 100);
+  Node b(2, 200);
+  pairUp(a, b);
+  a.pair.setTransmitAllowed(false, a.port.clock);
+  TEST_ASSERT_FALSE(a.pair.requestProxy(true, a.port.clock));
+  advance(a, b, 1000000);
+  TEST_ASSERT_FALSE(a.engine.proxyMode());
+  TEST_ASSERT_FALSE(b.engine.proxyMode());
+}
+
+void test_a_node_outside_the_band_keeps_the_other_from_starting() {
+  Node a(1, 100);
+  Node b(2, 200);
+  pairUp(a, b);
+  a.pair.setTransmitAllowed(false, a.port.clock);
+  TEST_ASSERT_TRUE(b.pair.requestProxy(true, b.port.clock));
+  advance(a, b, 30000000);
+  TEST_ASSERT_FALSE(a.engine.proxyMode());
+  TEST_ASSERT_FALSE(b.engine.proxyMode());
+  TEST_ASSERT_FALSE(a.pair.wanted());
+  TEST_ASSERT_FALSE(b.pair.wanted());
+}
+
+void test_tuning_out_of_the_band_stops_both_nodes() {
+  Node a(1, 100);
+  Node b(2, 200);
+  pairUp(a, b);
+  a.pair.requestProxy(true, a.port.clock);
+  advance(a, b, 1000000);
+  TEST_ASSERT_TRUE(b.engine.proxyMode());
+  a.pair.setTransmitAllowed(false, a.port.clock);
+  TEST_ASSERT_FALSE(a.engine.proxyMode());  // At once, not on the next tick.
+  advance(a, b, 1000000);
+  TEST_ASSERT_FALSE(b.engine.proxyMode());
+  // Back in the band, the proxy waits to be asked again.
+  a.pair.setTransmitAllowed(true, a.port.clock);
+  advance(a, b, 1000000);
+  TEST_ASSERT_FALSE(a.engine.proxyMode());
+  TEST_ASSERT_TRUE(a.pair.requestProxy(true, a.port.clock));
 }
 
 void test_no_transmission_before_the_partner_listens() {
@@ -2612,6 +2672,9 @@ int main() {
   RUN_TEST(test_nodes_stay_in_monitor_until_asked);
   RUN_TEST(test_one_request_starts_both_nodes_with_their_roles);
   RUN_TEST(test_one_request_stops_both_nodes);
+  RUN_TEST(test_a_node_outside_the_band_cannot_start_the_proxy);
+  RUN_TEST(test_a_node_outside_the_band_keeps_the_other_from_starting);
+  RUN_TEST(test_tuning_out_of_the_band_stops_both_nodes);
   RUN_TEST(test_no_transmission_before_the_partner_listens);
   RUN_TEST(test_start_gives_up_if_the_partner_never_answers);
   RUN_TEST(test_lost_link_pauses_and_a_returning_link_resumes);
@@ -2632,6 +2695,7 @@ int main() {
   RUN_TEST(test_retransmission_hash_groups_retries);
   RUN_TEST(test_airtime_of_a_wake_frame);
   RUN_TEST(test_phy_matches_the_tado_air_interface);
+  RUN_TEST(test_proxy_sends_only_in_the_868_0_to_868_6_band);
   RUN_TEST(test_dedup_sorts_new_echo_and_retry);
   RUN_TEST(test_dedup_window_expires);
   RUN_TEST(test_dedup_table_survives_more_frames_than_it_holds);

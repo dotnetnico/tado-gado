@@ -5,6 +5,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "band.h"
+
 namespace tadogado {
 
 namespace {
@@ -313,9 +315,11 @@ bool writeStatusJson(const StatusInput& input, char* out, size_t capacity) {
   }
 
   w.print(
-      ",\"radio\":{\"found\":%s,\"version\":%u,\"channel\":%u,\"fsctrl0\":%d,\"resets\":%lu,"
-      "\"overflows\":%lu},\"devices\":[",
+      ",\"radio\":{\"found\":%s,\"version\":%u,\"channel\":%u,\"fsctrl0\":%d,\"carrier_khz\":%ld,"
+      "\"transmit_allowed\":%s,\"resets\":%lu,\"overflows\":%lu},\"devices\":[",
       input.radio.found ? "true" : "false", input.radio.version, input.radio.channel, input.radio.fsctrl0,
+      static_cast<long>(carrierHz(input.radio.channel, input.radio.fsctrl0) / 1000),
+      transmitAllowed(input.radio.channel, input.radio.fsctrl0) ? "true" : "false",
       static_cast<unsigned long>(input.radio.resets), static_cast<unsigned long>(input.radio.overflows));
   bool first = true;
   for (size_t i = 0; i < kMaxDevices; i++) {

@@ -37,9 +37,11 @@ bool idle();
 
 void requestRetune(uint8_t channel, int8_t fsctrl0);
 void requestPower(uint8_t pa);
-// False if two nodes have not decided their roles yet.
+// False if two nodes have not decided their roles yet, or if the node may not send.
 bool requestProxyMode(bool enabled);
 bool proxyMode();
+// False while the radio is tuned outside the band the proxy may send in.
+bool transmitAllowed();
 // False if the survey cannot run: it retunes the radio, so not in proxy mode.
 bool requestSurvey();
 

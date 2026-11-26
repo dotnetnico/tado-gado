@@ -314,7 +314,10 @@ void PairManager::onPeerMessage(const PairHeader& header, const uint8_t* payload
       engine_.onPeerFrame(header.type == PairType::Uplink, payload, length, nowUs);
       return;
     case PairType::Mode:
-      if (length == 1 && payload[0] == 1) {
+      if (length == 1 && payload[0] == 1 && !transmitAllowed_) {
+        peerWanted_ = false;
+        sendMode(false);  // This node may not send here, so the other one must not start.
+      } else if (length == 1 && payload[0] == 1) {
         peerWanted_ = true;
         if (hasAssignment_ && !wanted_) {
           updateRole(nowUs);
@@ -467,7 +470,7 @@ void PairManager::updateRole(uint64_t nowUs) {
 
 void PairManager::apply(uint64_t nowUs) {
   const bool paired = role_ != Role::Single;
-  const bool active = wanted_ && (!paired || (peerAlive(nowUs) && peerWanted_));
+  const bool active = wanted_ && transmitAllowed_ && (!paired || (peerAlive(nowUs) && peerWanted_));
   if (engine_.proxyMode() != active) {
     if (active) {
       engine_.setRole(role_);
@@ -486,7 +489,7 @@ bool PairManager::requestProxy(bool enabled, uint64_t nowUs) {
     }
     return true;
   }
-  if (peerAlive(nowUs) && !hasAssignment_) {
+  if (!transmitAllowed_ || (peerAlive(nowUs) && !hasAssignment_)) {
     return false;
   }
   updateRole(nowUs);
@@ -498,6 +501,14 @@ bool PairManager::requestProxy(bool enabled, uint64_t nowUs) {
     sendMode(true);
   }
   return true;
+}
+
+void PairManager::setTransmitAllowed(bool allowed, uint64_t nowUs) {
+  transmitAllowed_ = allowed;
+  if (!allowed && wanted_) {
+    requestProxy(false, nowUs);
+    apply(nowUs);
+  }
 }
 
 void PairManager::tick(uint64_t nowUs) {

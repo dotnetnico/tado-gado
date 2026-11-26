@@ -563,7 +563,8 @@ function renderRadio(s, unlocked) {
   const r = s.radio, survey = s.survey;
   const memory = s.memory && s.memory.free ? `, ${Math.round(s.memory.free / 1024)} kB free (lowest ${Math.round(s.memory.min_free / 1024)} kB)` : '';
   $('radioState').textContent = r.found
-    ? `CC1101 version ${r.version}, channel ${r.channel}, trim ${r.fsctrl0}, firmware ${s.firmware}${memory}`
+    ? `CC1101 version ${r.version}, channel ${r.channel} (${(r.carrier_khz / 1000).toFixed(3)} MHz), trim ${r.fsctrl0}, firmware ${s.firmware}${memory}.`
+      + (r.transmit_allowed === false ? ' Outside 868.0-868.6 MHz: proxy mode stays off here. Pick channel 25-27.' : '')
     : `No CC1101 found. Check the wiring. Firmware ${s.firmware}${memory}.`;
   const running = survey && survey.running, best = survey && survey.best;
   $('surveyButton').disabled = !unlocked || running || !r.found || s.mode === 'proxy';
@@ -733,7 +734,9 @@ function render(s) {
   renderDevices(s, canControl, unlocked);
   renderFind(s, unlocked);
   $('frames').innerHTML = s.recent_frames.slice(0, 25).map(frameRow).join('');
-  $('modeButton').disabled = !canControl;
+  const outOfBand = s.radio && s.radio.transmit_allowed === false;
+  $('modeButton').disabled = !canControl || (s.mode !== 'proxy' && outOfBand);
+  $('modeButton').title = outOfBand ? 'The radio is tuned outside 868.0-868.6 MHz, where the proxy may not send.' : '';
   $('modeButton').textContent = s.mode === 'proxy' ? 'Switch to monitor' : 'Switch to proxy';
   $('modeButton').className = s.mode === 'proxy' ? 'on' : '';
   const readOnly = s.read_only
